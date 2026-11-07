@@ -10,6 +10,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -81,6 +82,10 @@ type Producto struct {
  * - Lemas: lema por idioma.
  * - Categorias: nombre de la categoría en español → idioma → traducción (se
  *   traduce una vez por categoría, no en cada producto).
+ * - OrdenCategorias: orden en que salen las categorías en la carta (nombres en
+ *   español); las que no estén en la lista van después, en orden de aparición.
+ * - Eslogan / Eslogans: frase de la portada y sus traducciones (si está vacío,
+ *   la portada muestra el lema). SinPortada quita la portada del PDF.
  **/
 type Carta struct {
 	Nombre     string                       `json:"nombre"`
@@ -89,6 +94,12 @@ type Carta struct {
 	Lemas      map[string]string            `json:"lemas"`
 	Categorias map[string]map[string]string `json:"categorias"`
 	Productos  []Producto                   `json:"productos"`
+
+	OrdenCategorias []string `json:"ordenCategorias"`
+
+	SinPortada bool              `json:"sinPortada"`
+	Eslogan    string            `json:"eslogan"`
+	Eslogans   map[string]string `json:"eslogans"`
 }
 
 /**
@@ -153,6 +164,12 @@ func normalizar(c Carta) Carta {
 	if c.Categorias == nil {
 		c.Categorias = map[string]map[string]string{}
 	}
+	if c.OrdenCategorias == nil {
+		c.OrdenCategorias = []string{}
+	}
+	if c.Eslogans == nil {
+		c.Eslogans = map[string]string{}
+	}
 	if c.Productos == nil {
 		c.Productos = []Producto{}
 	}
@@ -177,6 +194,7 @@ func (s *Store) Guardar(c Carta) error {
 	// Normaliza los textos y descarta datos inválidos.
 	c.Nombre = strings.TrimSpace(c.Nombre)
 	c.Lema = strings.TrimSpace(c.Lema)
+	c.Eslogan = strings.TrimSpace(c.Eslogan)
 	for i := range c.Productos {
 		p := &c.Productos[i]
 		p.Nombre = strings.TrimSpace(p.Nombre)
@@ -200,6 +218,7 @@ func (s *Store) Guardar(c Carta) error {
 			p.Traducciones[l] = t
 		}
 	}
+	c.OrdenCategorias = limpiarLista(c.OrdenCategorias)
 	c = normalizar(c)
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
@@ -239,6 +258,32 @@ func (c Carta) Seleccionados() []Producto {
 			out = append(out, p)
 		}
 	}
+	return out
+}
+
+/**
+ * Ordenados devuelve los productos agrupados por categoría según
+ * OrdenCategorias: primero las categorías de la lista (en ese orden), luego
+ * las demás en orden de aparición y al final los productos sin categoría.
+ * Dentro de cada categoría se conserva el orden de la carta.
+ **/
+func (c Carta) Ordenados(productos []Producto) []Producto {
+	// Posición de cada categoría: la de la lista o, si no está, por aparición.
+	rango := map[string]int{}
+	for i, cat := range c.OrdenCategorias {
+		if _, ok := rango[cat]; !ok {
+			rango[cat] = i
+		}
+	}
+	for _, p := range productos {
+		if _, ok := rango[p.Categoria]; !ok && p.Categoria != "" {
+			rango[p.Categoria] = len(c.OrdenCategorias) + len(rango)
+		}
+	}
+	// Sin categoría ("Otros") siempre al final.
+	rango[""] = len(c.OrdenCategorias) + len(rango) + 1
+	out := slices.Clone(productos)
+	slices.SortStableFunc(out, func(a, b Producto) int { return rango[a.Categoria] - rango[b.Categoria] })
 	return out
 }
 
@@ -285,4 +330,18 @@ func (c Carta) LemaEn(l string) string {
 		return v
 	}
 	return c.Lema
+}
+
+/**
+ * EsloganEn devuelve el eslogan de la portada en el idioma l: la traducción,
+ * el eslogan en español o, si no hay eslogan, el lema en ese idioma.
+ **/
+func (c Carta) EsloganEn(l string) string {
+	if c.Eslogan == "" {
+		return c.LemaEn(l)
+	}
+	if v := c.Eslogans[l]; l != IdiomaBase && v != "" {
+		return v
+	}
+	return c.Eslogan
 }

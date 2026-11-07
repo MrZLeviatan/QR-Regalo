@@ -37,8 +37,16 @@ const extras = () => carta.idiomas.filter((l) => l !== 'es');
 /** nombreIdioma devuelve el nombre propio de un idioma ("English"). **/
 const nombreIdioma = (l) => config.idiomas.find((i) => i.Codigo === l)?.Nombre || l.toUpperCase();
 
-/** categoriasDe devuelve las categorías en español usadas por los productos. **/
-const categoriasDe = () => [...new Set(carta.productos.map((p) => p.categoria).filter(Boolean))];
+/**
+ * categoriasDe devuelve las categorías en español usadas por los productos,
+ * en el orden de la carta: primero las de ordenCategorias y luego las nuevas
+ * en orden de aparición (igual que el PDF).
+ **/
+function categoriasDe() {
+  const usadas = [...new Set(carta.productos.map((p) => p.categoria).filter(Boolean))];
+  const orden = (carta.ordenCategorias || []).filter((c) => usadas.includes(c));
+  return [...orden, ...usadas.filter((c) => !orden.includes(c))];
+}
 
 /**
  * faltantes devuelve los idiomas activos en los que un producto no tiene el
@@ -128,8 +136,8 @@ async function actualizarEstado() {
  * resumen de seleccionados y las sugerencias de categorías del formulario.
  **/
 function render() {
-  // Agrupa conservando el orden en que aparece cada categoría.
-  const grupos = new Map();
+  // Agrupa en el orden de la carta (el mismo del PDF); "Otros" al final.
+  const grupos = new Map(categoriasDe().map((c) => [c, []]));
   for (const p of carta.productos) {
     const cat = p.categoria || 'Otros';
     if (!grupos.has(cat)) grupos.set(cat, []);
@@ -157,8 +165,38 @@ function render() {
   // Sugerencias de categoría para el formulario.
   $('categorias').innerHTML = [...grupos.keys()].filter((c) => c !== 'Otros').map((c) => `<option value="${esc(c)}">`).join('');
   renderIdiomas();
+  renderOrden();
   pintarTraducciones();
 }
+
+/**
+ * renderOrden dibuja la lista de categorías en el orden de la carta, con
+ * flechas para subir o bajar cada una (oculta si hay menos de dos).
+ **/
+function renderOrden() {
+  const cats = categoriasDe();
+  $('orden-card').hidden = cats.length < 2;
+  $('orden-lista').innerHTML = cats
+    .map((c, i) => `<li><span class="num">${i + 1}</span><span class="nombre">${esc(c)}</span>
+      <button type="button" class="btn btn-ghost btn-sm icono" data-mover="-1" data-i="${i}" ${i === 0 ? 'disabled' : ''} aria-label="Subir ${esc(c)}">↑</button>
+      <button type="button" class="btn btn-ghost btn-sm icono" data-mover="1" data-i="${i}" ${i === cats.length - 1 ? 'disabled' : ''} aria-label="Bajar ${esc(c)}">↓</button></li>`)
+    .join('');
+}
+
+// Subir o bajar una categoría: se guarda el orden completo y se vuelve a pintar.
+$('orden-lista').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-mover]');
+  if (!b || b.disabled) return;
+  const cats = categoriasDe();
+  const i = Number(b.dataset.i);
+  const j = i + Number(b.dataset.mover);
+  [cats[i], cats[j]] = [cats[j], cats[i]];
+  carta.ordenCategorias = cats;
+  render();
+  guardar();
+  // Mantiene el foco en la categoría movida para seguir moviéndola con el teclado.
+  $('orden-lista').querySelector(`[data-i="${j}"][data-mover="${b.dataset.mover}"]:not(:disabled)`)?.focus();
+});
 
 /**
  * tarjeta devuelve el HTML de un producto, con el mismo diseño que la tarjeta
@@ -525,6 +563,35 @@ function mostrarDestino() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Portada                                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * pintarPortada muestra si la portada está activa y su eslogan; si no hay
+ * eslogan, la guía es el lema (que es lo que saldría en la portada).
+ **/
+function pintarPortada() {
+  $('portada-activa').checked = !carta.sinPortada;
+  $('eslogan').value = carta.eslogan || '';
+  $('eslogan').placeholder = carta.lema ? `Vacío = se usa el lema: ${carta.lema}` : 'Ej.: Sabor de nuestra tierra';
+  $('eslogan').disabled = !!carta.sinPortada;
+}
+
+// Mostrar u ocultar la portada.
+$('portada-activa').addEventListener('change', (e) => {
+  carta.sinPortada = !e.target.checked;
+  pintarPortada();
+  guardar();
+});
+
+// Escribir el eslogan (la fila de traducción aparece al salir del campo).
+$('eslogan').addEventListener('input', (e) => {
+  carta.eslogan = e.target.value;
+  guardar();
+});
+$('eslogan').addEventListener('change', renderIdiomas);
+
+/* ------------------------------------------------------------------ */
 /* Idiomas y traducciones                                             */
 /* ------------------------------------------------------------------ */
 
@@ -565,11 +632,13 @@ function renderIdiomas() {
   if (!ls.includes(tabIdiomas)) tabIdiomas = ls[0];
   const l = tabIdiomas;
   const cats = categoriasDe();
-  const incompleto = (x) => !carta.lemas[x] || cats.some((c) => !carta.categorias[c]?.[x]);
+  const incompleto = (x) => !carta.lemas[x] || (carta.eslogan && !carta.eslogans[x]) || cats.some((c) => !carta.categorias[c]?.[x]);
   det.innerHTML = `<div class="tabs" role="tablist"></div>
     <div class="tab-panel">
       <div class="traduccion-fila"><span>Lema</span>
         <input class="input" data-lema="${l}" value="${esc(carta.lemas[l] || '')}" placeholder="${esc(carta.lema)}" /></div>
+      ${carta.eslogan ? `<div class="traduccion-fila"><span>Eslogan</span>
+        <input class="input" data-eslogan="${l}" value="${esc(carta.eslogans[l] || '')}" placeholder="${esc(carta.eslogan)}" /></div>` : ''}
       ${cats.map((c) => `<div class="traduccion-fila"><span>${esc(c)}</span>
         <input class="input" data-cat="${esc(c)}" value="${esc(carta.categorias[c]?.[l] || '')}" placeholder="${esc(c)}" /></div>`).join('')}
     </div>`;
@@ -592,6 +661,7 @@ $('idiomas-chips').addEventListener('click', (e) => {
 $('idiomas-detalle').addEventListener('input', (e) => {
   const v = e.target.value;
   if (e.target.dataset.lema) carta.lemas[e.target.dataset.lema] = v;
+  if (e.target.dataset.eslogan) carta.eslogans[e.target.dataset.eslogan] = v;
   if (e.target.dataset.cat !== undefined) (carta.categorias[e.target.dataset.cat] ??= {})[tabIdiomas] = v;
   guardar();
 });
@@ -693,6 +763,7 @@ $('traducir-todo').addEventListener('click', async (e) => {
       // Lema y categorías que faltan en este idioma.
       const tareas = [];
       if (!carta.lemas[l] && carta.lema) tareas.push({ texto: carta.lema, aplicar: (v) => (carta.lemas[l] = v) });
+      if (!carta.eslogans[l] && carta.eslogan) tareas.push({ texto: carta.eslogan, aplicar: (v) => (carta.eslogans[l] = v) });
       for (const c of categoriasDe()) {
         if (!carta.categorias[c]?.[l]) tareas.push({ texto: c, aplicar: (v) => ((carta.categorias[c] ??= {})[l] = v) });
       }
@@ -729,6 +800,8 @@ async function iniciar() {
   }
   $('nombre').value = carta.nombre;
   $('lema').value = carta.lema;
+  carta.eslogans ??= {};
+  pintarPortada();
   render();
   mostrarDestino();
   actualizarEstado();

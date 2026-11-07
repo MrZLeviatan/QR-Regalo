@@ -52,11 +52,11 @@ var (
  * etiquetas son los textos fijos del PDF en cada idioma.
  **/
 var etiquetas = map[string]map[string]string{
-	"es": {"ingredientes": "Ingredientes", "pagina": "página", "otros": "Otros", "vacio": "No hay productos seleccionados.", "idioma": "Idioma"},
-	"en": {"ingredientes": "Ingredients", "pagina": "page", "otros": "Others", "vacio": "No products selected.", "idioma": "Language"},
-	"fr": {"ingredientes": "Ingrédients", "pagina": "page", "otros": "Autres", "vacio": "Aucun produit sélectionné.", "idioma": "Langue"},
-	"de": {"ingredientes": "Zutaten", "pagina": "Seite", "otros": "Sonstiges", "vacio": "Keine Produkte ausgewählt.", "idioma": "Sprache"},
-	"pt": {"ingredientes": "Ingredientes", "pagina": "página", "otros": "Outros", "vacio": "Nenhum produto selecionado.", "idioma": "Idioma"},
+	"es": {"ingredientes": "Ingredientes", "pagina": "página", "otros": "Otros", "vacio": "No hay productos seleccionados.", "idioma": "Idioma", "carta": "Carta"},
+	"en": {"ingredientes": "Ingredients", "pagina": "page", "otros": "Others", "vacio": "No products selected.", "idioma": "Language", "carta": "Menu"},
+	"fr": {"ingredientes": "Ingrédients", "pagina": "page", "otros": "Autres", "vacio": "Aucun produit sélectionné.", "idioma": "Langue", "carta": "Carte"},
+	"de": {"ingredientes": "Zutaten", "pagina": "Seite", "otros": "Sonstiges", "vacio": "Keine Produkte ausgewählt.", "idioma": "Sprache", "carta": "Speisekarte"},
+	"pt": {"ingredientes": "Ingredientes", "pagina": "página", "otros": "Outros", "vacio": "Nenhum produto selecionado.", "idioma": "Idioma", "carta": "Cardápio"},
 }
 
 /**
@@ -89,12 +89,15 @@ func pesos(v int64) string {
  * GenerarPDF arma el PDF en un idioma con los productos seleccionados
  * agrupados por categoría (en el orden en que aparece cada categoría por
  * primera vez). Los textos sin traducir salen en español.
+ * Si la carta tiene portada, la primera página es la portada verde con el
+ * logo, el nombre y el eslogan.
  * Entradas: la carta, los productos a incluir, el idioma, el formato de la URL
  * pública del PDF de cada idioma (con %s en lugar del código, para los enlaces
- * "Idioma: ES · EN …" de la cabecera), la carpeta de imágenes y el logo en PNG.
+ * "Idioma: ES · EN …" de la cabecera), la carpeta de imágenes, el logo en PNG
+ * y el fondo de la portada en JPEG.
  * Salida: los bytes del PDF.
  **/
-func GenerarPDF(c Carta, productos []Producto, idioma, enlaceIdioma, imgDir string, logo []byte) ([]byte, error) {
+func GenerarPDF(c Carta, productos []Producto, idioma, enlaceIdioma, imgDir string, logo, fondoPortada []byte) ([]byte, error) {
 	pdf := gofpdf.New("P", "mm", "A4", "")
 	pdf.SetMargins(margin, margin, margin)
 	pdf.SetAutoPageBreak(false, bottom)
@@ -109,22 +112,38 @@ func GenerarPDF(c Carta, productos []Producto, idioma, enlaceIdioma, imgDir stri
 		pdf.Rect(0, 0, pageW, pageH, "F")
 		franja(pdf)
 	}, false)
-	// Pie: nombre del restaurante y número de página.
+	// Pie: nombre del restaurante y número de página. La portada no lleva pie
+	// ni cuenta como página de la carta.
+	conPortada := !c.SinPortada
 	pdf.SetFooterFunc(func() {
+		n := pdf.PageNo()
+		if conPortada {
+			if n == 1 {
+				return
+			}
+			n--
+		}
 		pdf.SetY(-11)
 		pdf.SetFont("Helvetica", "", 8)
 		text(pdf, gris)
-		pdf.CellFormat(0, 5, tr(fmt.Sprintf("%s  ·  %s %d", c.Nombre, etiqueta(idioma, "pagina"), pdf.PageNo())), "", 0, "C", false, 0, "")
+		pdf.CellFormat(0, 5, tr(fmt.Sprintf("%s  ·  %s %d", c.Nombre, etiqueta(idioma, "pagina"), n)), "", 0, "C", false, 0, "")
 	})
 
+	if len(logo) > 0 {
+		pdf.RegisterImageOptionsReader("logo", gofpdf.ImageOptions{ImageType: "PNG"}, bytes.NewReader(logo))
+	}
+	if conPortada {
+		pdf.AddPage()
+		portada(pdf, c, idioma, enlaceIdioma, len(logo) > 0, fondoPortada, tr)
+	}
 	pdf.AddPage()
-	cabecera(pdf, c, idioma, enlaceIdioma, logo, tr)
+	cabecera(pdf, c, idioma, enlaceIdioma, len(logo) > 0, tr)
 
-	// Agrupa por categoría (ya traducida) conservando el orden de aparición.
+	// Agrupa por categoría (ya traducida) en el orden elegido en el editor.
 	// Cada producto se reemplaza por su versión en el idioma del PDF.
 	orden := []string{}
 	grupos := map[string][]Producto{}
-	for _, p := range productos {
+	for _, p := range c.Ordenados(productos) {
 		t := c.EnIdioma(p, idioma)
 		p.Nombre, p.Descripcion, p.Ingredientes = t.Nombre, t.Descripcion, t.Ingredientes
 		cat := t.Categoria
@@ -179,11 +198,101 @@ func GenerarPDF(c Carta, productos []Producto, idioma, enlaceIdioma, imgDir stri
 }
 
 /**
- * cabecera dibuja la banda verde de la primera página con el logo en un
- * círculo crema, el nombre del restaurante y su lema traducido y, si hay más
- * de un idioma, enlaces a los PDF de los demás idiomas. Deja el cursor debajo.
+ * portada dibuja la página de inicio de la carta: fondo verde con el mural
+ * del barranquero desvanecido (como el banner del editor), franjas tricolor
+ * arriba y abajo, el logo grande en un círculo crema, el nombre, el eslogan
+ * traducido y la palabra "Carta" en el idioma del PDF.
  **/
-func cabecera(pdf *gofpdf.Fpdf, c Carta, idioma, enlaceIdioma string, logo []byte, tr func(string) string) {
+func portada(pdf *gofpdf.Fpdf, c Carta, idioma, enlaceIdioma string, hayLogo bool, fondo []byte, tr func(string) string) {
+	// Fondo: imagen pregenerada (verde + mural); sin ella, verde liso.
+	if len(fondo) > 0 {
+		opt := gofpdf.ImageOptions{ImageType: "JPG"}
+		pdf.RegisterImageOptionsReader("portada", opt, bytes.NewReader(fondo))
+		pdf.ImageOptions("portada", 0, 0, pageW, pageH, false, opt, 0, "")
+	} else {
+		fill(pdf, verde)
+		pdf.Rect(0, 0, pageW, pageH, "F")
+	}
+	franja(pdf)
+	franjaEn(pdf, pageH-2.5)
+	selectorIdiomas(pdf, c, idioma, enlaceIdioma, tr)
+
+	// Logo grande al centro, dentro de un círculo crema con sombra suave.
+	cx, cy, r := pageW/2, 104.0, 46.0
+	pdf.SetAlpha(0.18, "Normal")
+	fill(pdf, rgb{0, 0, 0})
+	pdf.Circle(cx+1.2, cy+1.8, r, "F")
+	pdf.SetAlpha(1, "Normal")
+	fill(pdf, crema)
+	pdf.Circle(cx, cy, r, "F")
+	if hayLogo {
+		pdf.ImageOptions("logo", cx-r+2, cy-r+2, 2*r-4, 2*r-4, false, gofpdf.ImageOptions{ImageType: "PNG"}, 0, "")
+	}
+
+	// Nombre del restaurante.
+	pdf.SetTextColor(255, 255, 255)
+	pdf.SetFont("Helvetica", "B", 40)
+	pdf.SetXY(margin, cy+r+14)
+	pdf.CellFormat(pageW-2*margin, 16, tr(c.Nombre), "", 0, "C", false, 0, "")
+
+	// Separador amarillo y eslogan (o el lema si no hay eslogan).
+	y := cy + r + 34
+	pdf.SetDrawColor(amarillo.r, amarillo.g, amarillo.b)
+	pdf.SetLineWidth(1.2)
+	pdf.Line(cx-14, y, cx+14, y)
+	if eslogan := c.EsloganEn(idioma); eslogan != "" {
+		pdf.SetFont("Helvetica", "", 16)
+		ancho := 150.0
+		for i, l := range lineas(pdf, tr(eslogan), ancho) {
+			pdf.SetXY(cx-ancho/2, y+6+float64(i)*8)
+			pdf.CellFormat(ancho, 8, l, "", 0, "C", false, 0, "")
+		}
+	}
+
+	// "CARTA" abajo, espaciada, como rótulo.
+	pdf.SetFont("Helvetica", "B", 11)
+	pdf.SetTextColor(255, 255, 255)
+	pdf.SetXY(margin, pageH-26)
+	rotulo := strings.Join(strings.Split(strings.ToUpper(etiqueta(idioma, "carta")), ""), " ")
+	pdf.CellFormat(pageW-2*margin, 6, tr(rotulo), "", 0, "C", false, 0, "")
+}
+
+/**
+ * selectorIdiomas dibuja arriba a la derecha los enlaces "Idioma: ES · EN …":
+ * cada código enlaza a su PDF y el actual va resaltado en amarillo. Solo si
+ * hay más de un idioma y una URL pública.
+ **/
+func selectorIdiomas(pdf *gofpdf.Fpdf, c Carta, idioma, enlaceIdioma string, tr func(string) string) {
+	if len(c.Idiomas) < 2 || enlaceIdioma == "" {
+		return
+	}
+	const ancho = 8.0
+	xi := pageW - margin - ancho*float64(len(c.Idiomas))
+	pdf.SetTextColor(255, 255, 255)
+	pdf.SetFont("Helvetica", "", 7.5)
+	pdf.SetXY(xi-30, 6)
+	pdf.CellFormat(29, 5, tr(etiqueta(idioma, "idioma")+":"), "", 0, "R", false, 0, "")
+	for i, l := range c.Idiomas {
+		xl := xi + ancho*float64(i)
+		pdf.SetFont("Helvetica", "B", 8.5)
+		if l == idioma {
+			fill(pdf, amarillo)
+			pdf.RoundedRect(xl+0.5, 6, ancho-1, 5, 1.2, "1234", "F")
+			text(pdf, tinta)
+		} else {
+			pdf.SetTextColor(255, 255, 255)
+		}
+		pdf.SetXY(xl, 6)
+		pdf.CellFormat(ancho, 5, strings.ToUpper(l), "", 0, "C", false, 0, fmt.Sprintf(enlaceIdioma, l))
+	}
+}
+
+/**
+ * cabecera dibuja la banda verde de la primera página de la carta con el logo
+ * en un círculo crema, el nombre del restaurante y su lema traducido y el
+ * selector de idioma. Deja el cursor debajo.
+ **/
+func cabecera(pdf *gofpdf.Fpdf, c Carta, idioma, enlaceIdioma string, hayLogo bool, tr func(string) string) {
 	const h = 38.0
 	fill(pdf, verde)
 	pdf.Rect(0, 2.5, pageW, h, "F")
@@ -191,8 +300,7 @@ func cabecera(pdf *gofpdf.Fpdf, c Carta, idioma, enlaceIdioma string, logo []byt
 	cx, cy, r := margin+13, 2.5+h/2, 13.0
 	fill(pdf, crema)
 	pdf.Circle(cx, cy, r, "F")
-	if len(logo) > 0 {
-		pdf.RegisterImageOptionsReader("logo", gofpdf.ImageOptions{ImageType: "PNG"}, bytes.NewReader(logo))
+	if hayLogo {
 		pdf.ImageOptions("logo", cx-r+1, cy-r+1, 2*r-2, 2*r-2, false, gofpdf.ImageOptions{ImageType: "PNG"}, 0, "")
 	}
 	// Nombre y lema en blanco a la derecha del logo.
@@ -206,29 +314,7 @@ func cabecera(pdf *gofpdf.Fpdf, c Carta, idioma, enlaceIdioma string, logo []byt
 		pdf.SetXY(x, cy+2)
 		pdf.CellFormat(pageW-x-margin, 6, tr(lema), "", 0, "L", false, 0, "")
 	}
-	// Selector de idioma arriba a la derecha: cada código enlaza a su PDF y el
-	// actual va resaltado en amarillo.
-	if len(c.Idiomas) > 1 && enlaceIdioma != "" {
-		const ancho = 8.0
-		xi := pageW - margin - ancho*float64(len(c.Idiomas))
-		pdf.SetTextColor(255, 255, 255)
-		pdf.SetFont("Helvetica", "", 7.5)
-		pdf.SetXY(xi-30, 6)
-		pdf.CellFormat(29, 5, tr(etiqueta(idioma, "idioma")+":"), "", 0, "R", false, 0, "")
-		for i, l := range c.Idiomas {
-			xl := xi + ancho*float64(i)
-			pdf.SetFont("Helvetica", "B", 8.5)
-			if l == idioma {
-				fill(pdf, amarillo)
-				pdf.RoundedRect(xl+0.5, 6, ancho-1, 5, 1.2, "1234", "F")
-				text(pdf, tinta)
-			} else {
-				pdf.SetTextColor(255, 255, 255)
-			}
-			pdf.SetXY(xl, 6)
-			pdf.CellFormat(ancho, 5, strings.ToUpper(l), "", 0, "C", false, 0, fmt.Sprintf(enlaceIdioma, l))
-		}
-	}
+	selectorIdiomas(pdf, c, idioma, enlaceIdioma, tr)
 	pdf.SetY(2.5 + h + 8)
 }
 
@@ -236,14 +322,19 @@ func cabecera(pdf *gofpdf.Fpdf, c Carta, idioma, enlaceIdioma string, logo []byt
  * franja dibuja la franja tricolor superior: amarillo 50 %, azul 25 % y rojo
  * 25 %, como la barra de la carta web.
  **/
-func franja(pdf *gofpdf.Fpdf) {
+func franja(pdf *gofpdf.Fpdf) { franjaEn(pdf, 0) }
+
+/**
+ * franjaEn dibuja la franja tricolor a la altura y dada.
+ **/
+func franjaEn(pdf *gofpdf.Fpdf, y float64) {
 	const h = 2.5
 	fill(pdf, amarillo)
-	pdf.Rect(0, 0, pageW*0.5, h, "F")
+	pdf.Rect(0, y, pageW*0.5, h, "F")
 	fill(pdf, azul)
-	pdf.Rect(pageW*0.5, 0, pageW*0.25, h, "F")
+	pdf.Rect(pageW*0.5, y, pageW*0.25, h, "F")
 	fill(pdf, rojo)
-	pdf.Rect(pageW*0.75, 0, pageW*0.25, h, "F")
+	pdf.Rect(pageW*0.75, y, pageW*0.25, h, "F")
 }
 
 /**

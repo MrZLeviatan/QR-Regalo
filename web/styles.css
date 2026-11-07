@@ -112,6 +112,10 @@ textarea.input { resize: vertical; }
 /* Título de sección con un botón a la derecha. */
 .fila-titulo { display: flex; align-items: center; justify-content: space-between; gap: .5rem; flex-wrap: wrap; }
 
+/* Casilla con texto a la derecha (p. ej. "Mostrar portada"). */
+.interruptor { display: inline-flex; align-items: center; gap: .5rem; font-size: .875rem; font-weight: 600; cursor: pointer; }
+.interruptor input { width: 1.25rem; height: 1.25rem; accent-color: var(--verde); }
+
 /* Idiomas activos: interruptores con forma de insignia. */
 .idiomas-chips { display: flex; flex-wrap: wrap; gap: .5rem; margin: .75rem 0; }
 .idioma-chip { min-height: 2.25rem; padding: 0 .75rem; border: 0; border-radius: 999px; font: inherit; font-size: .875rem; font-weight: 600;
@@ -131,6 +135,13 @@ textarea.input { resize: vertical; }
 .traduccion-fila { display: grid; grid-template-columns: minmax(6rem, 10rem) 1fr; gap: .5rem; align-items: center; margin-top: .5rem; }
 .traduccion-fila span { font-size: .875rem; font-weight: 600; color: rgb(26 28 32 / .7); overflow-wrap: anywhere; }
 .badge.falta { background: rgb(206 17 38 / .1); color: var(--cereza); }
+
+/* Orden de las categorías: una fila por categoría con flechas para moverla. */
+.orden-lista { list-style: none; margin: .75rem 0 0; padding: 0; display: grid; gap: .375rem; }
+.orden-lista li { display: flex; align-items: center; gap: .5rem; padding: .25rem .25rem .25rem .75rem; border-radius: .5rem;
+  background: var(--crema); box-shadow: inset 0 0 0 1px rgb(0 0 0 / .06); }
+.orden-lista .num { width: 1.5rem; font-weight: 800; color: var(--verde); }
+.orden-lista .nombre { flex: 1; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
 
 /* Vista previa de la foto. */
 .imagen-fila { display: flex; gap: .75rem; align-items: center; }

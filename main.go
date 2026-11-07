@@ -62,8 +62,10 @@ type App struct {
 	pubDir  string // copia local de la carta publicada
 	baseURL string
 	logo    []byte
-	gh      *GitHub // nil = modo local (el QR apunta a este equipo)
-	ghError string  // por qué no se pudo usar GitHub, para mostrarlo en el editor
+	// fondoPortada es la imagen de fondo de la portada del PDF (verde + mural).
+	fondoPortada []byte
+	gh           *GitHub // nil = modo local (el QR apunta a este equipo)
+	ghError      string  // por qué no se pudo usar GitHub, para mostrarlo en el editor
 
 	traductor *Traductor
 }
@@ -91,6 +93,7 @@ func main() {
 		}
 	}
 	a.logo, _ = webFS.ReadFile("web/logo.png")
+	a.fondoPortada, _ = webFS.ReadFile("web/portada.jpg")
 	a.traductor = NuevoTraductor()
 
 	// Publicación en GitHub Pages si está configurada; si falla, modo local con aviso.
@@ -196,7 +199,7 @@ func (a *App) subirImagen(w http.ResponseWriter, r *http.Request) {
  * versionDiseno cambia cuando cambia el diseño del PDF o del selector, para
  * que una carta igual publicada con el diseño nuevo cuente como cambio.
  **/
-const versionDiseno = 3
+const versionDiseno = 4
 
 /**
  * version devuelve la huella de todo lo que se ve en la carta publicada
@@ -206,7 +209,9 @@ const versionDiseno = 3
 func version(c Carta) string {
 	huella, _ := json.Marshal(map[string]any{
 		"v": versionDiseno, "nombre": c.Nombre, "lema": c.Lema, "lemas": c.Lemas,
-		"idiomas": c.Idiomas, "categorias": c.Categorias, "productos": c.Seleccionados(),
+		"idiomas": c.Idiomas, "categorias": c.Categorias, "orden": c.OrdenCategorias,
+		"portada": !c.SinPortada, "eslogan": c.Eslogan, "eslogans": c.Eslogans,
+		"productos": c.Seleccionados(),
 	})
 	sum := sha256.Sum256(huella)
 	return hex.EncodeToString(sum[:6])
@@ -238,7 +243,7 @@ func (a *App) publicar(w http.ResponseWriter, r *http.Request) {
 	sitio := a.urlCarta()
 	var archivos []Archivo
 	for _, l := range c.Idiomas {
-		pdf, err := GenerarPDF(c, sel, l, sitio+"%s.pdf?v="+v, a.imgDir, a.logo)
+		pdf, err := GenerarPDF(c, sel, l, sitio+"%s.pdf?v="+v, a.imgDir, a.logo, a.fondoPortada)
 		if err != nil {
 			fallo(w, http.StatusInternalServerError, err)
 			return
@@ -305,7 +310,7 @@ func (a *App) vista(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Sin enlaces de idioma: la vista previa no está publicada en ninguna dirección.
-	pdf, err := GenerarPDF(c, c.Seleccionados(), l, "", a.imgDir, a.logo)
+	pdf, err := GenerarPDF(c, c.Seleccionados(), l, "", a.imgDir, a.logo, a.fondoPortada)
 	if err != nil {
 		fallo(w, http.StatusInternalServerError, err)
 		return

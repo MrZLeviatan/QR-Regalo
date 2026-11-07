@@ -45,6 +45,19 @@
   </div>
 
   <main class="contenedor principal">
+    <!-- Portada del PDF: mostrarla u ocultarla y su eslogan. -->
+    <section class="card formulario" aria-labelledby="portada-titulo">
+      <div class="fila-titulo">
+        <h2 id="portada-titulo" class="seccion-titulo">📕 Portada</h2>
+        <label class="interruptor"><input type="checkbox" id="portada-activa" /> Mostrar portada</label>
+      </div>
+      <p class="ayuda">Primera página del PDF: fondo verde con el mural, el logo grande, el nombre y el eslogan.</p>
+      <div class="campo" style="margin-top:.75rem">
+        <label class="label" for="eslogan">Eslogan</label>
+        <input id="eslogan" class="input" maxlength="120" />
+      </div>
+    </section>
+
     <!-- Idiomas: activar idiomas, traducir lema y categorías y autocompletar lo que falte. -->
     <section class="card formulario" aria-labelledby="idiomas-titulo">
       <div class="fila-titulo">
@@ -121,6 +134,13 @@
         <button type="submit" id="f-guardar" class="btn btn-primary">Agregar a la carta</button>
       </div>
     </form>
+
+    <!-- Orden en que salen las categorías en la carta (PDF y lista). -->
+    <section class="card formulario" id="orden-card" aria-labelledby="orden-titulo" hidden>
+      <h2 id="orden-titulo" class="seccion-titulo">📋 Orden de la carta</h2>
+      <p class="ayuda">Así salen las categorías en el PDF, de arriba hacia abajo. Usa las flechas para moverlas y luego publica.</p>
+      <ol id="orden-lista" class="orden-lista"></ol>
+    </section>
 
     <!-- Lista de productos por categoría. -->
     <div class="lista-cabecera">

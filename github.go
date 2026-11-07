@@ -234,7 +234,9 @@ func (g *GitHub) activarPages() error {
 	}
 	body := map[string]any{"source": map[string]string{"branch": repo.DefaultBranch, "path": "/"}}
 	if err := g.api("POST", "/repos/"+g.repo+"/pages", body, nil); err != nil {
-		return fmt.Errorf("no se pudo activar GitHub Pages (actívalo a mano en Settings → Pages): %w", err)
+		// La carta ya quedó subida: solo falta Pages (suele faltar el permiso "Pages" del token).
+		return fmt.Errorf("la carta se subió a GitHub, pero falta activar GitHub Pages: en el repositorio ve a "+
+			"Settings → Pages → Source \"Deploy from a branch\", rama %s y carpeta / (root), y vuelve a publicar (%w)", repo.DefaultBranch, err)
 	}
 	g.leerPages()
 	return nil

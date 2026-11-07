@@ -66,3 +66,43 @@ func TestPulir(t *testing.T) {
 		}
 	}
 }
+
+/**
+ * TestOrdenados: primero las categorías en el orden elegido, luego las que no
+ * están en la lista (por aparición) y al final los productos sin categoría;
+ * dentro de cada categoría se conserva el orden de la carta.
+ **/
+func TestOrdenados(t *testing.T) {
+	c := Carta{OrdenCategorias: []string{"Fritos", "Postres"}}
+	ps := []Producto{
+		{Nombre: "Latte", Categoria: "Cafés"},
+		{Nombre: "Torta", Categoria: "Postres"},
+		{Nombre: "Suelto"},
+		{Nombre: "Empanada", Categoria: "Fritos"},
+		{Nombre: "Dedos", Categoria: "Fritos"},
+		{Nombre: "Expreso", Categoria: "Cafés"},
+	}
+	var got []string
+	for _, p := range c.Ordenados(ps) {
+		got = append(got, p.Nombre)
+	}
+	want := []string{"Empanada", "Dedos", "Torta", "Latte", "Expreso", "Suelto"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("orden = %v, se esperaba %v", got, want)
+	}
+}
+
+/**
+ * TestEsloganEn: traducción si existe, español si falta y, sin eslogan, el
+ * lema del idioma.
+ **/
+func TestEsloganEn(t *testing.T) {
+	c := normalizar(Carta{Lema: "Comida típica", Lemas: map[string]string{"en": "Typical food"}})
+	if c.EsloganEn("en") != "Typical food" {
+		t.Fatal("sin eslogan debe usarse el lema traducido")
+	}
+	c.Eslogan, c.Eslogans = "Sabor de casa", map[string]string{"en": "Taste of home"}
+	if c.EsloganEn("en") != "Taste of home" || c.EsloganEn("fr") != "Sabor de casa" || c.EsloganEn("es") != "Sabor de casa" {
+		t.Fatal("eslogan por idioma con respaldo en español incorrecto")
+	}
+}
