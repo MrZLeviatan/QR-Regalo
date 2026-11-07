@@ -1,0 +1,324 @@
+/**
+ * Generación del PDF de la carta con el mismo diseño general del catálogo El
+ * Regalo: fondo crema, franja tricolor arriba, cabecera verde con el logo y el
+ * nombre, categorías en verde oscuro y cada producto en una tarjeta blanca con
+ * su foto cuadrada a la derecha, precio, descripción e ingredientes.
+ **/
+package main
+
+import (
+	"bytes"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/phpdave11/gofpdf"
+)
+
+/**
+ * Medidas de la página A4 en milímetros y de las tarjetas.
+ **/
+const (
+	pageW   = 210.0
+	pageH   = 297.0
+	margin  = 14.0
+	bottom  = 16.0 // espacio reservado para el pie de página
+	pad     = 4.0  // relleno interior de cada tarjeta
+	imgSize = 30.0 // lado de la foto cuadrada
+	gap     = 4.0  // separación entre tarjetas
+)
+
+/**
+ * rgb es un color de la identidad de El Regalo (los mismos valores que el
+ * tema compartido del catálogo).
+ **/
+type rgb struct{ r, g, b int }
+
+var (
+	verde       = rgb{0x2b, 0x7a, 0x57}
+	verdeOscuro = rgb{0x1d, 0x5a, 0x40}
+	amarillo    = rgb{0xfc, 0xd1, 0x16}
+	azul        = rgb{0x1f, 0x5f, 0xb8}
+	rojo        = rgb{0xce, 0x11, 0x26}
+	crema       = rgb{0xff, 0xf8, 0xe7}
+	tinta       = rgb{0x1a, 0x1c, 0x20}
+	gris        = rgb{0x6b, 0x6d, 0x70}
+	borde       = rgb{0xe6, 0xe1, 0xd4}
+)
+
+/**
+ * pesos formatea un precio en pesos colombianos: 25000 → "$ 25.000".
+ **/
+func pesos(v int64) string {
+	s := fmt.Sprintf("%d", v)
+	// Inserta un punto cada tres cifras desde la derecha.
+	var b strings.Builder
+	for i, ch := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			b.WriteByte('.')
+		}
+		b.WriteRune(ch)
+	}
+	return "$ " + b.String()
+}
+
+/**
+ * GenerarPDF arma el PDF con los productos seleccionados agrupados por
+ * categoría (en el orden en que aparece cada categoría por primera vez).
+ * Entradas: la carta, los productos a incluir, la carpeta de imágenes y el
+ * logo en PNG. Salida: los bytes del PDF.
+ **/
+func GenerarPDF(c Carta, productos []Producto, imgDir string, logo []byte) ([]byte, error) {
+	pdf := gofpdf.New("P", "mm", "A4", "")
+	pdf.SetMargins(margin, margin, margin)
+	pdf.SetAutoPageBreak(false, bottom)
+	pdf.SetTitle(c.Nombre, true)
+	pdf.SetAuthor(c.Nombre, true)
+	// gofpdf usa cp1252: el traductor convierte tildes, ñ y signos de español.
+	tr := pdf.UnicodeTranslatorFromDescriptor("")
+
+	// Fondo crema y franja tricolor en todas las páginas.
+	pdf.SetHeaderFuncMode(func() {
+		fill(pdf, crema)
+		pdf.Rect(0, 0, pageW, pageH, "F")
+		franja(pdf)
+	}, false)
+	// Pie: nombre del restaurante y número de página.
+	pdf.SetFooterFunc(func() {
+		pdf.SetY(-11)
+		pdf.SetFont("Helvetica", "", 8)
+		text(pdf, gris)
+		pdf.CellFormat(0, 5, tr(fmt.Sprintf("%s  ·  página %d", c.Nombre, pdf.PageNo())), "", 0, "C", false, 0, "")
+	})
+
+	pdf.AddPage()
+	cabecera(pdf, c, logo, tr)
+
+	// Agrupa por categoría conservando el orden de aparición.
+	orden := []string{}
+	grupos := map[string][]Producto{}
+	for _, p := range productos {
+		cat := p.Categoria
+		if cat == "" {
+			cat = "Otros"
+		}
+		if _, ok := grupos[cat]; !ok {
+			orden = append(orden, cat)
+		}
+		grupos[cat] = append(grupos[cat], p)
+	}
+
+	y := pdf.GetY()
+	if len(productos) == 0 {
+		// Carta sin productos: aviso centrado en lugar de una página vacía.
+		pdf.SetFont("Helvetica", "I", 11)
+		text(pdf, gris)
+		pdf.SetXY(margin, y+10)
+		pdf.CellFormat(pageW-2*margin, 8, tr("No hay productos seleccionados."), "", 0, "C", false, 0, "")
+	}
+	for _, cat := range orden {
+		items := grupos[cat]
+		// El título nunca queda solo al final de la página: se reserva su
+		// altura más la de la primera tarjeta.
+		if y+12+alturaTarjeta(pdf, items[0], tr) > pageH-bottom {
+			pdf.AddPage()
+			y = margin + 4
+		}
+		pdf.SetFont("Helvetica", "B", 16)
+		text(pdf, verdeOscuro)
+		pdf.SetXY(margin, y)
+		pdf.CellFormat(0, 9, tr(cat), "", 0, "L", false, 0, "")
+		y += 12
+		for _, p := range items {
+			// Salto de página cuando la tarjeta no cabe completa.
+			h := alturaTarjeta(pdf, p, tr)
+			if y+h > pageH-bottom {
+				pdf.AddPage()
+				y = margin + 4
+			}
+			tarjeta(pdf, p, y, h, imgDir, tr)
+			y += h + gap
+		}
+		y += 4
+	}
+
+	var buf bytes.Buffer
+	if err := pdf.Output(&buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+/**
+ * cabecera dibuja la banda verde de la primera página con el logo en un
+ * círculo crema, el nombre del restaurante y su lema, y deja el cursor debajo.
+ **/
+func cabecera(pdf *gofpdf.Fpdf, c Carta, logo []byte, tr func(string) string) {
+	const h = 38.0
+	fill(pdf, verde)
+	pdf.Rect(0, 2.5, pageW, h, "F")
+	// Logo dentro de un círculo crema, igual que en la carta web.
+	cx, cy, r := margin+13, 2.5+h/2, 13.0
+	fill(pdf, crema)
+	pdf.Circle(cx, cy, r, "F")
+	if len(logo) > 0 {
+		pdf.RegisterImageOptionsReader("logo", gofpdf.ImageOptions{ImageType: "PNG"}, bytes.NewReader(logo))
+		pdf.ImageOptions("logo", cx-r+1, cy-r+1, 2*r-2, 2*r-2, false, gofpdf.ImageOptions{ImageType: "PNG"}, 0, "")
+	}
+	// Nombre y lema en blanco a la derecha del logo.
+	x := cx + r + 6
+	pdf.SetTextColor(255, 255, 255)
+	pdf.SetFont("Helvetica", "B", 24)
+	pdf.SetXY(x, cy-10)
+	pdf.CellFormat(pageW-x-margin, 11, tr(c.Nombre), "", 0, "L", false, 0, "")
+	if c.Lema != "" {
+		pdf.SetFont("Helvetica", "", 11)
+		pdf.SetXY(x, cy+2)
+		pdf.CellFormat(pageW-x-margin, 6, tr(c.Lema), "", 0, "L", false, 0, "")
+	}
+	pdf.SetY(2.5 + h + 8)
+}
+
+/**
+ * franja dibuja la franja tricolor superior: amarillo 50 %, azul 25 % y rojo
+ * 25 %, como la barra de la carta web.
+ **/
+func franja(pdf *gofpdf.Fpdf) {
+	const h = 2.5
+	fill(pdf, amarillo)
+	pdf.Rect(0, 0, pageW*0.5, h, "F")
+	fill(pdf, azul)
+	pdf.Rect(pageW*0.5, 0, pageW*0.25, h, "F")
+	fill(pdf, rojo)
+	pdf.Rect(pageW*0.75, 0, pageW*0.25, h, "F")
+}
+
+/**
+ * anchoTexto es el ancho disponible para el texto de una tarjeta: se le resta
+ * el relleno y, si hay foto, el espacio de la foto.
+ **/
+func anchoTexto(p Producto) float64 {
+	w := pageW - 2*margin - 2*pad
+	if p.Imagen != "" {
+		w -= imgSize + pad
+	}
+	return w
+}
+
+/**
+ * lineas parte un texto en líneas que caben en el ancho dado con la fuente
+ * actual (el texto ya debe estar traducido a cp1252). Usa SplitLines, que
+ * trabaja por bytes: SplitText falla con letras como "ñ" o "á" en cp1252.
+ **/
+func lineas(pdf *gofpdf.Fpdf, s string, w float64) []string {
+	if s == "" {
+		return nil
+	}
+	out := []string{}
+	for _, l := range pdf.SplitLines([]byte(s), w) {
+		out = append(out, string(l))
+	}
+	return out
+}
+
+/**
+ * alturaTarjeta calcula el alto de la tarjeta de un producto: nombre, línea de
+ * precio, descripción e ingredientes, o el alto de la foto si es mayor.
+ **/
+func alturaTarjeta(pdf *gofpdf.Fpdf, p Producto, tr func(string) string) float64 {
+	w := anchoTexto(p)
+	// Nombre (puede ocupar varias líneas) + precio.
+	pdf.SetFont("Helvetica", "B", 12)
+	h := float64(len(lineas(pdf, tr(p.Nombre), w))) * 5.5
+	h += 6.5
+	// Descripción.
+	pdf.SetFont("Helvetica", "", 9.5)
+	h += float64(len(lineas(pdf, tr(p.Descripcion), w))) * 4.5
+	// Ingredientes.
+	if len(p.Ingredientes) > 0 {
+		pdf.SetFont("Helvetica", "I", 8.5)
+		h += 1.5 + float64(len(lineas(pdf, tr(ingredientesTexto(p)), w)))*4.2
+	}
+	if p.Imagen != "" {
+		h = max(h, imgSize)
+	}
+	return h + 2*pad
+}
+
+/**
+ * ingredientesTexto devuelve la línea "Ingredientes: a, b, c".
+ **/
+func ingredientesTexto(p Producto) string {
+	return "Ingredientes: " + strings.Join(p.Ingredientes, ", ")
+}
+
+/**
+ * tarjeta dibuja un producto en una tarjeta blanca redondeada en la posición
+ * y dada, con la foto cuadrada (esquinas redondeadas) a la derecha.
+ **/
+func tarjeta(pdf *gofpdf.Fpdf, p Producto, y, h float64, imgDir string, tr func(string) string) {
+	x, w := margin, pageW-2*margin
+	// Fondo blanco con borde suave, como la clase "card" del tema.
+	fill(pdf, rgb{255, 255, 255})
+	pdf.SetDrawColor(borde.r, borde.g, borde.b)
+	pdf.SetLineWidth(0.3)
+	pdf.RoundedRect(x, y, w, h, 3, "1234", "FD")
+
+	tw := anchoTexto(p)
+	ty := y + pad
+	// Nombre en negrita.
+	pdf.SetFont("Helvetica", "B", 12)
+	text(pdf, tinta)
+	for _, l := range lineas(pdf, tr(p.Nombre), tw) {
+		pdf.SetXY(x+pad, ty)
+		pdf.CellFormat(tw, 5.5, l, "", 0, "L", false, 0, "")
+		ty += 5.5
+	}
+	// Precio en verde oscuro.
+	pdf.SetFont("Helvetica", "B", 11)
+	text(pdf, verdeOscuro)
+	pdf.SetXY(x+pad, ty+0.5)
+	pdf.CellFormat(tw, 5.5, tr(pesos(p.Precio)), "", 0, "L", false, 0, "")
+	ty += 6.5
+	// Descripción en gris tinta.
+	pdf.SetFont("Helvetica", "", 9.5)
+	text(pdf, gris)
+	for _, l := range lineas(pdf, tr(p.Descripcion), tw) {
+		pdf.SetXY(x+pad, ty)
+		pdf.CellFormat(tw, 4.5, l, "", 0, "L", false, 0, "")
+		ty += 4.5
+	}
+	// Ingredientes en cursiva verde.
+	if len(p.Ingredientes) > 0 {
+		ty += 1.5
+		pdf.SetFont("Helvetica", "I", 8.5)
+		text(pdf, verde)
+		for _, l := range lineas(pdf, tr(ingredientesTexto(p)), tw) {
+			pdf.SetXY(x+pad, ty)
+			pdf.CellFormat(tw, 4.2, l, "", 0, "L", false, 0, "")
+			ty += 4.2
+		}
+	}
+	// Foto: se recorta con esquinas redondeadas; si falla se omite sin romper el PDF.
+	if p.Imagen != "" {
+		ix, iy := x+w-pad-imgSize, y+(h-imgSize)/2
+		if b, err := os.ReadFile(filepath.Join(imgDir, p.Imagen)); err == nil {
+			tipo := map[string]string{"image/jpeg": "JPG", "image/png": "PNG"}[http.DetectContentType(b)]
+			if tipo != "" {
+				opt := gofpdf.ImageOptions{ImageType: tipo}
+				pdf.RegisterImageOptionsReader(p.Imagen, opt, bytes.NewReader(b))
+				pdf.ClipRoundedRect(ix, iy, imgSize, imgSize, 3, false)
+				pdf.ImageOptions(p.Imagen, ix, iy, imgSize, imgSize, false, opt, 0, "")
+				pdf.ClipEnd()
+			}
+		}
+	}
+}
+
+/**
+ * fill y text fijan el color de relleno y de texto a partir de un rgb.
+ **/
+func fill(pdf *gofpdf.Fpdf, c rgb) { pdf.SetFillColor(c.r, c.g, c.b) }
+func text(pdf *gofpdf.Fpdf, c rgb) { pdf.SetTextColor(c.r, c.g, c.b) }

@@ -1,0 +1,4 @@
+# Datos locales (carta, fotos y PDF publicados), binario y secretos.
+/data/
+/qr-regalo
+.env

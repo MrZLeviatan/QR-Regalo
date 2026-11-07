@@ -1,0 +1,164 @@
+/**
+ * Estilos del editor de la carta. Replica el tema compartido del catálogo El
+ * Regalo (colores de la marca, botones, campos, tarjetas e insignias) en CSS
+ * plano, sin paso de compilación.
+ **/
+
+/* Colores y fuente de la identidad de El Regalo. */
+:root {
+  --verde: #2b7a57;
+  --verde-claro: #4fb286;
+  --verde-oscuro: #1d5a40;
+  --azul: #1f5fb8;
+  --amarillo: #fcd116;
+  --rojo: #ce1126;
+  --cereza: #a3101c;
+  --crema: #fff8e7;
+  --cafe: #5b4636;
+  --tinta: #1a1c20;
+  --font: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
+}
+
+/* Base: fondo crema, texto tinta y foco visible para teclado. */
+* { box-sizing: border-box; }
+html { -webkit-tap-highlight-color: transparent; }
+body { margin: 0; background: var(--crema); color: var(--tinta); font-family: var(--font); -webkit-font-smoothing: antialiased; }
+:focus-visible { outline: 3px solid var(--azul); outline-offset: 2px; }
+img { display: block; max-width: 100%; }
+/* El atributo hidden gana siempre, aunque la clase fije un display. */
+[hidden] { display: none !important; }
+h1, h2, h3, p { margin: 0; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.contenedor { max-width: 48rem; margin: 0 auto; padding: 0 1rem; }
+
+/* Franja tricolor (amarillo 50 %, azul 25 %, rojo 25 %). */
+.tricolor { height: .375rem; background: linear-gradient(90deg, var(--amarillo) 0 50%, var(--azul) 50% 75%, var(--rojo) 75%); }
+
+/* Botones: base y variantes. */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: .5rem;
+  min-height: 2.75rem; padding: .5rem 1rem; border: 0; border-radius: .5rem;
+  font: inherit; font-weight: 600; text-decoration: none; cursor: pointer;
+  transition: background-color .15s, box-shadow .15s, transform .1s;
+}
+.btn:disabled { cursor: not-allowed; opacity: .5; }
+.btn:active:not(:disabled) { transform: scale(.98); }
+.btn-primary { background: var(--verde); color: #fff; }
+.btn-primary:hover { background: var(--verde-oscuro); }
+.btn-secondary { background: #fff; color: var(--tinta); box-shadow: inset 0 0 0 1px rgb(0 0 0 / .15); }
+.btn-secondary:hover { background: #f4f4f4; }
+.btn-danger { background: var(--rojo); color: #fff; }
+.btn-danger:hover { background: var(--cereza); }
+.btn-ghost { background: transparent; color: var(--tinta); }
+.btn-ghost:hover { background: rgb(0 0 0 / .05); }
+.btn-sm { min-height: 2.25rem; padding: .25rem .75rem; font-size: .875rem; }
+.btn-sm.icono { min-width: 2.25rem; padding: .25rem; }
+
+/* Campos, etiquetas, tarjetas, insignias y errores. */
+.input {
+  width: 100%; min-height: 2.75rem; padding: .5rem .75rem; border: 1px solid rgb(0 0 0 / .2);
+  border-radius: .5rem; background: #fff; color: inherit; font: inherit;
+}
+.input:focus, .chips:focus-within { border-color: var(--azul); box-shadow: 0 0 0 3px rgb(31 95 184 / .3); outline: none; }
+textarea.input { resize: vertical; }
+.label { display: block; margin-bottom: .25rem; font-size: .875rem; font-weight: 600; color: rgb(26 28 32 / .8); }
+.card { background: #fff; border-radius: .75rem; box-shadow: 0 1px 2px rgb(0 0 0 / .05), 0 0 0 1px rgb(0 0 0 / .05); }
+.badge { display: inline-flex; align-items: center; gap: .25rem; padding: .125rem .5rem; border-radius: 999px; font-size: .75rem; font-weight: 600; }
+.field-error { margin-top: .5rem; min-height: 1.25rem; font-size: .875rem; color: var(--rojo); }
+.ayuda { margin-top: .25rem; font-size: .8125rem; color: rgb(26 28 32 / .6); }
+
+/* Cabecera verde con el mural del barranquero a la derecha. */
+.cabecera { position: relative; overflow: hidden; background: var(--verde); color: #fff; }
+.mural {
+  position: absolute; inset: 0 0 0 auto; width: 50%; height: 100%; object-fit: cover; object-position: top;
+  opacity: .35; -webkit-mask-image: linear-gradient(to left, #000, transparent); mask-image: linear-gradient(to left, #000, transparent);
+}
+.cabecera-fila { position: relative; display: flex; align-items: center; gap: .75rem; padding-top: 1rem; padding-bottom: 1.25rem; }
+.logo { width: 4rem; height: 4rem; flex-shrink: 0; border-radius: 999px; background: var(--crema); padding: 2px; box-shadow: 0 1px 3px rgb(0 0 0 / .2); }
+.cabecera-textos { flex: 1; min-width: 0; }
+/* Nombre y lema se editan en el sitio, con un subrayado sutil al enfocarlos. */
+.titulo-input, .lema-input {
+  display: block; width: 100%; border: 0; border-bottom: 1px dashed transparent; background: transparent;
+  color: #fff; font: inherit; padding: 0;
+}
+.titulo-input { font-size: 1.5rem; font-weight: 900; line-height: 1.25; }
+.lema-input { font-size: .875rem; color: rgb(255 255 255 / .85); }
+.titulo-input:hover, .lema-input:hover, .titulo-input:focus, .lema-input:focus { border-bottom-color: rgb(255 255 255 / .6); outline: none; }
+.titulo-input::placeholder, .lema-input::placeholder { color: rgb(255 255 255 / .6); }
+
+/* Barra fija con el resumen y las acciones principales. */
+.barra { position: sticky; top: 0; z-index: 20; background: rgb(255 248 231 / .95); backdrop-filter: blur(8px); box-shadow: 0 1px 2px rgb(0 0 0 / .08); }
+.barra-fila { display: flex; align-items: center; gap: .5rem; padding-top: .75rem; padding-bottom: .75rem; }
+.barra-info { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: .875rem; }
+.estado { font-size: .75rem; color: rgb(26 28 32 / .6); }
+
+/* Contenido principal. */
+.principal { padding-top: 1rem; padding-bottom: 4rem; }
+.seccion-titulo { font-size: 1.25rem; font-weight: 900; color: var(--verde-oscuro); }
+
+/* Formulario del producto. */
+.formulario { padding: 1rem; margin-bottom: 2rem; }
+.formulario.editando { box-shadow: 0 0 0 2px var(--amarillo); }
+.rejilla { display: grid; gap: .75rem; margin-top: .75rem; grid-template-columns: 1fr 1fr; }
+.campo.ancho { grid-column: 1 / -1; }
+.acciones { display: flex; justify-content: flex-end; gap: .5rem; flex-wrap: wrap; }
+
+/* Ingredientes como chips dentro de un campo. */
+.chips { display: flex; flex-wrap: wrap; gap: .375rem; align-items: center; height: auto; cursor: text; }
+.chips input { flex: 1; min-width: 10rem; border: 0; outline: none; font: inherit; padding: .25rem 0; background: transparent; }
+.chip { background: rgb(43 122 87 / .12); color: var(--verde-oscuro); font-size: .8125rem; }
+.chip button { border: 0; background: none; color: inherit; cursor: pointer; font-size: 1rem; line-height: 1; padding: 0 0 0 .125rem; }
+
+/* Vista previa de la foto. */
+.imagen-fila { display: flex; gap: .75rem; align-items: center; }
+.preview { width: 5.5rem; height: 5.5rem; flex-shrink: 0; border-radius: .75rem; object-fit: cover; }
+.preview.vacia { display: grid; place-items: center; font-size: 2rem; background: rgb(0 0 0 / .05); }
+
+/* Lista de productos. */
+.lista-cabecera { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-bottom: .75rem; }
+.lista-acciones { display: flex; gap: .25rem; }
+.categoria { margin-bottom: 2rem; }
+.categoria h3 { font-size: 1.125rem; font-weight: 900; color: var(--verde-oscuro); margin-bottom: .75rem; }
+.grilla { display: grid; gap: .75rem; }
+@media (min-width: 640px) { .grilla { grid-template-columns: 1fr 1fr; } }
+.vacio { padding: 3rem 1rem; text-align: center; color: rgb(26 28 32 / .6); }
+
+/* Tarjeta de producto, como DishCard del catálogo, con casilla y acciones. */
+.plato { display: flex; gap: .75rem; padding: .75rem; transition: box-shadow .15s, opacity .15s; }
+.plato:hover { box-shadow: 0 4px 6px rgb(0 0 0 / .08), 0 0 0 1px rgb(0 0 0 / .05); }
+.plato.fuera { opacity: .55; }
+.plato.fuera:hover { opacity: .8; }
+.plato-check { width: 1.25rem; height: 1.25rem; margin-top: .125rem; flex-shrink: 0; accent-color: var(--verde); cursor: pointer; }
+.plato-cuerpo { flex: 1; min-width: 0; }
+.plato-nombre { font-weight: 700; line-height: 1.3; }
+.plato-desc { margin-top: .25rem; font-size: .875rem; color: rgb(26 28 32 / .7); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.plato-ing { margin-top: .375rem; font-size: .75rem; font-style: italic; color: var(--verde); }
+.plato-pie { margin-top: .5rem; display: flex; align-items: center; gap: .25rem; flex-wrap: wrap; }
+.precio { font-weight: 700; color: var(--verde-oscuro); margin-right: auto; }
+.plato-img { width: 6rem; height: 6rem; flex-shrink: 0; border-radius: .75rem; object-fit: cover; }
+
+/* Diálogo del QR. */
+.dialogo { border: 0; padding: 1.25rem; width: min(26rem, calc(100vw - 2rem)); text-align: center; }
+.dialogo::backdrop { background: rgb(26 28 32 / .5); }
+.dialogo .acciones { justify-content: center; margin-top: 1rem; }
+.qr { width: 15rem; height: 15rem; margin: 1rem auto .5rem; image-rendering: pixelated; border-radius: .5rem; box-shadow: 0 0 0 1px rgb(0 0 0 / .08); }
+.url { font-size: .8125rem; word-break: break-all; }
+.url a { color: var(--azul); }
+.aviso { margin-top: .75rem; padding: .625rem; border-radius: .75rem; background: rgb(252 209 22 / .3); font-size: .8125rem; text-align: left; }
+.aviso.listo { background: rgb(43 122 87 / .12); color: var(--verde-oscuro); }
+#destino.local { color: var(--cereza); font-weight: 600; }
+
+/* Aviso flotante breve. */
+.toast {
+  position: fixed; left: 50%; bottom: max(1rem, env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 50;
+  max-width: calc(100vw - 2rem); padding: .75rem 1rem; border-radius: .75rem; background: var(--tinta); color: #fff;
+  font-weight: 600; box-shadow: 0 10px 25px rgb(0 0 0 / .2);
+}
+.toast.error { background: var(--rojo); }
+
+/* Teléfonos: una columna en el formulario y textos de botón compactos. */
+@media (max-width: 560px) {
+  .rejilla { grid-template-columns: 1fr; }
+  .ocultar-movil { display: none; }
+  .plato-img { width: 4.5rem; height: 4.5rem; }
+}

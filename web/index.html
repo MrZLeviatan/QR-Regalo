@@ -1,0 +1,126 @@
+<!doctype html>
+<!--
+  Editor de la carta de El Regalo: cabecera con logo y nombre, formulario para
+  agregar o editar productos, lista de productos por categoría con casillas
+  para elegir cuáles entran en el PDF, y el botón que publica el PDF y
+  descarga su código QR.
+-->
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#2b7a57" />
+  <title>Carta El Regalo · QR</title>
+  <link rel="icon" href="/logo.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="tricolor"></div>
+
+  <!-- Cabecera: mural, logo, nombre y lema editables. -->
+  <header class="cabecera">
+    <img src="/mural.webp" alt="" class="mural" />
+    <div class="contenedor cabecera-fila">
+      <img src="/logo.svg" alt="" class="logo" />
+      <div class="cabecera-textos">
+        <label class="sr-only" for="nombre">Nombre del restaurante</label>
+        <input id="nombre" class="titulo-input" placeholder="Nombre del restaurante" maxlength="60" />
+        <label class="sr-only" for="lema">Lema</label>
+        <input id="lema" class="lema-input" placeholder="Lema o descripción corta" maxlength="90" />
+      </div>
+    </div>
+  </header>
+
+  <!-- Barra fija: resumen de selección, estado de guardado y acciones. -->
+  <div class="barra">
+    <div class="contenedor barra-fila">
+      <div class="barra-info">
+        <strong id="resumen">0 productos</strong>
+        <span id="destino" class="estado"></span>
+        <span id="estado" class="estado" role="status"></span>
+      </div>
+      <button id="ver-pdf" class="btn btn-secondary">📄 <span class="ocultar-movil">Ver PDF</span></button>
+      <button id="descargar-qr" class="btn btn-primary">▦ Descargar QR</button>
+    </div>
+  </div>
+
+  <main class="contenedor principal">
+    <!-- Formulario de producto (agregar o editar). -->
+    <form id="formulario" class="card formulario" autocomplete="off">
+      <h2 id="form-titulo" class="seccion-titulo">➕ Agregar producto</h2>
+      <div class="rejilla">
+        <div class="campo ancho">
+          <label class="label" for="f-nombre">Nombre *</label>
+          <input id="f-nombre" class="input" required maxlength="80" placeholder="Bandeja paisa" />
+        </div>
+        <div class="campo">
+          <label class="label" for="f-categoria">Categoría</label>
+          <input id="f-categoria" class="input" list="categorias" maxlength="40" placeholder="Platos fuertes" />
+          <datalist id="categorias"></datalist>
+        </div>
+        <div class="campo">
+          <label class="label" for="f-precio">Precio (COP) *</label>
+          <input id="f-precio" class="input" required inputmode="numeric" placeholder="32.000" />
+        </div>
+        <div class="campo ancho">
+          <label class="label" for="f-descripcion">Descripción</label>
+          <textarea id="f-descripcion" class="input" rows="2" maxlength="300" placeholder="Frijoles, arroz, carne molida, chicharrón…"></textarea>
+        </div>
+        <div class="campo ancho">
+          <label class="label" for="f-ingrediente">Ingredientes</label>
+          <div class="chips input" id="chips">
+            <input id="f-ingrediente" placeholder="Escribe y pulsa Enter o coma" />
+          </div>
+        </div>
+        <div class="campo ancho">
+          <span class="label">Imagen</span>
+          <div class="imagen-fila">
+            <div id="f-preview" class="preview vacia">🍽️</div>
+            <div>
+              <label class="btn btn-secondary btn-sm">
+                📷 Elegir foto
+                <input id="f-imagen" type="file" accept="image/*" class="sr-only" />
+              </label>
+              <button type="button" id="f-quitar" class="btn btn-ghost btn-sm" hidden>Quitar</button>
+              <p class="ayuda">Se recorta cuadrada y se reduce automáticamente.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p id="f-error" class="field-error" role="alert"></p>
+      <div class="acciones">
+        <button type="button" id="f-cancelar" class="btn btn-ghost" hidden>Cancelar</button>
+        <button type="submit" id="f-guardar" class="btn btn-primary">Agregar a la carta</button>
+      </div>
+    </form>
+
+    <!-- Lista de productos por categoría. -->
+    <div class="lista-cabecera">
+      <h2 class="seccion-titulo">🍽️ Productos</h2>
+      <div class="lista-acciones">
+        <button id="todos" class="btn btn-ghost btn-sm">Marcar todos</button>
+        <button id="ninguno" class="btn btn-ghost btn-sm">Ninguno</button>
+      </div>
+    </div>
+    <div id="lista"></div>
+  </main>
+
+  <!-- Diálogo con el QR publicado. -->
+  <dialog id="dialogo" class="card dialogo">
+    <h2 class="seccion-titulo">✓ Carta publicada</h2>
+    <p class="ayuda" id="d-resumen"></p>
+    <img id="d-qr" alt="Código QR de la carta" class="qr" />
+    <p class="url"><a id="d-url" target="_blank" rel="noopener"></a></p>
+    <p id="d-aviso" class="aviso"></p>
+    <div class="acciones">
+      <button id="d-cerrar" class="btn btn-ghost">Cerrar</button>
+      <a id="d-pdf" class="btn btn-secondary" target="_blank" rel="noopener">📄 Ver PDF</a>
+      <a id="d-descargar" class="btn btn-primary">⬇ Descargar QR</a>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

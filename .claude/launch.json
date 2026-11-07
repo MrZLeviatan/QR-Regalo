@@ -1,0 +1,6 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "qr-regalo", "runtimeExecutable": "go", "runtimeArgs": ["run", "."], "port": 8090 }
+  ]
+}
