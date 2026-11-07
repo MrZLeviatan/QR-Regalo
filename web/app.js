@@ -1,8 +1,9 @@
 /**
  * Lógica del editor de la carta: carga la carta del servidor, permite agregar,
- * editar, eliminar y seleccionar productos (con foto e ingredientes), guarda
- * automáticamente cada cambio y, con "Descargar QR", publica el PDF de los
- * productos seleccionados y descarga el código QR que apunta a él.
+ * editar, eliminar y seleccionar productos (con foto, ingredientes y
+ * traducciones), activar idiomas y traducir automáticamente lo que falte,
+ * guarda cada cambio y, con "Publicar carta", reemplaza la carta publicada
+ * (un PDF por idioma) en la dirección fija del QR, que se imprime una sola vez.
  **/
 'use strict';
 
@@ -11,6 +12,13 @@ let carta = { nombre: '', lema: '', productos: [] };
 let editandoId = null;
 let ingredientes = [];
 let imagen = '';
+// Traducciones del producto en el formulario ({en: {nombre, descripcion, ingredientes}}).
+let tradForm = {};
+// Pestaña de idioma activa en el formulario y en la tarjeta de idiomas.
+let tabForm = null;
+let tabIdiomas = null;
+// Configuración del servidor: idiomas admitidos, destino de publicación y traductor.
+let config = { idiomas: [{ Codigo: 'es', Nombre: 'Español' }], modo: 'local', traductor: '' };
 
 /** $ es un atajo para buscar un elemento por id. **/
 const $ = (id) => document.getElementById(id);
@@ -23,6 +31,21 @@ const pesos = (v) => '$ ' + Number(v || 0).toLocaleString('es-CO', { maximumFrac
 /**
  * esc escapa texto para insertarlo en HTML sin riesgo.
  **/
+/** extras devuelve los idiomas activos distintos del español. **/
+const extras = () => carta.idiomas.filter((l) => l !== 'es');
+
+/** nombreIdioma devuelve el nombre propio de un idioma ("English"). **/
+const nombreIdioma = (l) => config.idiomas.find((i) => i.Codigo === l)?.Nombre || l.toUpperCase();
+
+/** categoriasDe devuelve las categorías en español usadas por los productos. **/
+const categoriasDe = () => [...new Set(carta.productos.map((p) => p.categoria).filter(Boolean))];
+
+/**
+ * faltantes devuelve los idiomas activos en los que un producto no tiene el
+ * nombre traducido (para avisar en su tarjeta).
+ **/
+const faltantes = (p) => extras().filter((l) => !p.traducciones?.[l]?.nombre);
+
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 /**
@@ -67,7 +90,7 @@ function guardar() {
     guardarTimer = setTimeout(async () => {
       try {
         await api('/api/carta', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(carta) });
-        $('estado').textContent = 'Cambios guardados ✓';
+        await actualizarEstado();
       } catch (e) {
         $('estado').textContent = 'No se pudo guardar';
         toast(e.message, true);
@@ -76,6 +99,24 @@ function guardar() {
     }, 400);
   });
   return pendiente;
+}
+
+/**
+ * actualizarEstado muestra en la barra si lo guardado ya está publicado o si
+ * hay cambios que las mesas todavía no ven (falta pulsar "Publicar carta").
+ **/
+async function actualizarEstado() {
+  const el = $('estado');
+  try {
+    const e = await api('/api/estado');
+    el.className = 'estado' + (e.pendientes ? ' pendiente' : '');
+    el.textContent = e.pendientes
+      ? e.publicada ? '● Guardado · cambios sin publicar' : '● Guardado · aún no publicada'
+      : e.publicada ? '✓ Guardado y publicado' : 'Cambios guardados ✓';
+  } catch {
+    el.className = 'estado';
+    el.textContent = 'Cambios guardados ✓';
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -115,6 +156,8 @@ function render() {
 
   // Sugerencias de categoría para el formulario.
   $('categorias').innerHTML = [...grupos.keys()].filter((c) => c !== 'Otros').map((c) => `<option value="${esc(c)}">`).join('');
+  renderIdiomas();
+  pintarTraducciones();
 }
 
 /**
@@ -132,6 +175,7 @@ function tarjeta(p) {
         ${p.ingredientes.length ? `<p class="plato-ing">🌿 ${esc(p.ingredientes.join(', '))}</p>` : ''}
         <div class="plato-pie">
           <span class="precio">${pesos(p.precio)}</span>
+          ${faltantes(p).map((l) => `<span class="badge falta" title="Falta traducir el nombre">${l.toUpperCase()}</span>`).join('')}
           <button class="btn btn-ghost btn-sm icono" data-accion="editar" title="Editar" aria-label="Editar ${esc(p.nombre)}">✏️</button>
           <button class="btn btn-ghost btn-sm icono" data-accion="eliminar" title="Eliminar" aria-label="Eliminar ${esc(p.nombre)}">🗑️</button>
         </div>
@@ -287,8 +331,10 @@ function editar(p) {
   $('f-descripcion').value = p.descripcion;
   ingredientes = [...p.ingredientes];
   imagen = p.imagen;
+  tradForm = structuredClone(p.traducciones || {});
   pintarChips();
   pintarImagen();
+  pintarTraducciones();
   $('form-titulo').textContent = '✏️ Editar producto';
   $('f-guardar').textContent = 'Guardar cambios';
   $('f-cancelar').hidden = false;
@@ -307,8 +353,10 @@ function limpiarFormulario() {
   $('f-categoria').value = $('f-categoria').dataset.ultima || '';
   ingredientes = [];
   imagen = '';
+  tradForm = {};
   pintarChips();
   pintarImagen();
+  pintarTraducciones();
   $('f-error').textContent = '';
   $('form-titulo').textContent = '➕ Agregar producto';
   $('f-guardar').textContent = 'Agregar a la carta';
@@ -333,6 +381,7 @@ $('formulario').addEventListener('submit', (e) => {
     precio,
     ingredientes: [...ingredientes],
     imagen,
+    traducciones: structuredClone(tradForm),
   };
   if (editandoId) {
     Object.assign(carta.productos.find((p) => p.id === editandoId), datos);
@@ -362,14 +411,22 @@ for (const campo of ['nombre', 'lema']) {
 }
 
 /**
- * publicar espera a que termine el guardado pendiente y pide al servidor
- * generar el PDF de los productos seleccionados. Devuelve {id, url, qr}.
+ * guardarYa guarda la carta de inmediato (sin esperar el guardado diferido).
  **/
-async function publicar() {
+async function guardarYa() {
   clearTimeout(guardarTimer);
   await api('/api/carta', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(carta) });
-  $('estado').textContent = 'Cambios guardados ✓';
-  return api('/api/publicar', { method: 'POST' });
+}
+
+/**
+ * publicar guarda y pide al servidor reemplazar la carta publicada en la
+ * dirección fija del QR. Devuelve {version, url, qr, productos, idiomas, web}.
+ **/
+async function publicar() {
+  await guardarYa();
+  const r = await api('/api/publicar', { method: 'POST' });
+  await actualizarEstado();
+  return r;
 }
 
 /**
@@ -384,35 +441,37 @@ function descargar(url) {
   a.remove();
 }
 
-// Botón principal: publica el PDF, descarga el QR y muestra el diálogo.
+// Botón principal: publica la carta y muestra el QR fijo para descargarlo.
 $('descargar-qr').addEventListener('click', async (e) => {
   const btn = e.currentTarget;
   btn.disabled = true;
   try {
     const r = await publicar();
-    const urlDescarga = r.qr + '?descargar=1';
-    descargar(urlDescarga);
-    $('d-resumen').textContent = `${r.productos} producto${r.productos === 1 ? '' : 's'} en el PDF. El QR se descargó como imagen PNG.`;
-    $('d-qr').src = r.qr;
+    const n = r.idiomas.length;
+    $('d-resumen').textContent = `${r.productos} producto${r.productos === 1 ? '' : 's'} en ${n} idioma${n === 1 ? '' : 's'}. Este QR es fijo: imprímelo una vez y cada vez que publiques se actualiza solo.`;
+    $('d-qr').src = r.qr + '?v=' + r.version;
     $('d-url').href = r.url;
     $('d-url').textContent = r.url;
-    $('d-pdf').href = `/carta/${r.id}.pdf?ver=1`;
-    $('d-descargar').href = urlDescarga;
+    $('d-pdf').href = '/carta/es.pdf?ver=1';
+    $('d-idiomas').innerHTML = r.idiomas
+      .map((l) => `<a href="/carta/${l}.pdf?ver=1&v=${r.version}" target="_blank" rel="noopener">${esc(nombreIdioma(l))}</a>`)
+      .join(' · ');
+    $('d-descargar').href = r.qr + '?descargar=1';
     $('dialogo').showModal();
     esperarPublicacion(r);
   } catch (err) {
-    toast(err.message, true);
+    toast('No se pudo publicar: ' + err.message, true);
   }
   btn.disabled = false;
 });
 
-// Vista previa: publica y abre el PDF en otra pestaña.
+// Vista previa: genera el PDF en español con lo guardado, sin publicarlo.
 $('ver-pdf').addEventListener('click', async () => {
   // La pestaña se abre antes de la petición para que el navegador no la bloquee.
   const win = window.open('about:blank', '_blank');
   try {
-    const r = await publicar();
-    if (win) win.location = `/carta/${r.id}.pdf?ver=1`;
+    await guardarYa();
+    if (win) win.location = '/api/vista/es.pdf?t=' + Date.now();
   } catch (err) {
     win?.close();
     toast(err.message, true);
@@ -436,12 +495,12 @@ async function esperarPublicacion(r) {
     return;
   }
   aviso.className = 'aviso';
-  aviso.textContent = '⏳ Publicando en GitHub Pages… puede tardar cerca de un minuto. Ya puedes descargar e imprimir el QR: la dirección no cambia.';
+  aviso.textContent = '⏳ Actualizando la carta en internet… GitHub tarda cerca de un minuto. Mientras tanto, los celulares ven la versión anterior.';
   for (let i = 0; i < 48 && turno === esperaId && $('dialogo').open; i++) {
     try {
-      if ((await api(`/api/disponible/${r.id}`)).disponible) {
+      if ((await api(`/api/disponible/${r.version}`)).disponible) {
         aviso.className = 'aviso listo';
-        aviso.textContent = '✓ Disponible en internet: el QR funciona con datos móviles o cualquier Wi‑Fi y descarga el PDF.';
+        aviso.textContent = '✓ Carta actualizada en internet: el QR la abre con datos móviles o cualquier Wi‑Fi. Un celular que la abrió hace poco puede tardar unos minutos en ver los cambios.';
         return;
       }
     } catch {
@@ -455,19 +514,205 @@ async function esperarPublicacion(r) {
  * mostrarDestino indica en la barra dónde se publica la carta: en la web
  * (GitHub Pages) o solo en la red local, con el motivo si GitHub falló.
  **/
-async function mostrarDestino() {
-  try {
-    const c = await api('/api/config');
-    const el = $('destino');
-    el.className = 'estado' + (c.modo === 'web' ? '' : ' local');
-    el.textContent = c.modo === 'web' ? `🌐 QR en la web: ${c.destino.replace(/^https?:\/\//, '')}` : '⚠️ QR solo en red local';
-    el.title = c.error || c.destino;
-    // GitHub configurado pero con error: se avisa para que se corrija el .env.
-    if (c.error) toast('GitHub Pages no disponible: ' + c.error, true);
-  } catch {
-    // Sin configuración visible no se bloquea el editor.
-  }
+function mostrarDestino() {
+  const c = config;
+  const el = $('destino');
+  el.className = 'estado' + (c.modo === 'web' ? '' : ' local');
+  el.textContent = c.modo === 'web' ? `🌐 QR en la web: ${c.destino.replace(/^https?:\/\//, '')}` : '⚠️ QR solo en red local';
+  el.title = c.error || c.destino;
+  // GitHub configurado pero con error: se avisa para que se corrija el .env.
+  if (c.error) toast('GitHub Pages no disponible: ' + c.error, true);
 }
+
+/* ------------------------------------------------------------------ */
+/* Idiomas y traducciones                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * pestanas dibuja una fila de pestañas (una por idioma) en el contenedor y
+ * llama a alElegir con el código al tocar una. marca(l) puede devolver true
+ * para señalar con un punto rojo que a ese idioma le falta algo.
+ **/
+function pestanas(contenedor, idiomas, activa, alElegir, marca = () => false) {
+  contenedor.innerHTML = idiomas
+    .map((l) => `<button type="button" role="tab" class="tab" data-l="${l}" aria-selected="${l === activa}">
+      ${esc(nombreIdioma(l))}${marca(l) ? ' <span class="falta" aria-label="incompleto">●</span>' : ''}</button>`)
+    .join('');
+  contenedor.onclick = (e) => {
+    const b = e.target.closest('[data-l]');
+    if (b) alElegir(b.dataset.l);
+  };
+}
+
+/**
+ * renderIdiomas dibuja la tarjeta de idiomas: interruptores de idiomas
+ * activos y, por idioma, la traducción del lema y de cada categoría.
+ **/
+function renderIdiomas() {
+  // Interruptores: el español siempre activo.
+  $('idiomas-chips').innerHTML = config.idiomas
+    .map((i) => `<button type="button" class="idioma-chip" data-l="${i.Codigo}" aria-pressed="${carta.idiomas.includes(i.Codigo)}"
+      ${i.Codigo === 'es' ? 'disabled title="Idioma base de la carta"' : ''}>${i.Codigo.toUpperCase()} · ${esc(i.Nombre)}</button>`)
+    .join('');
+
+  // Detalle por idioma: lema y categorías.
+  const ls = extras();
+  const det = $('idiomas-detalle');
+  if (!ls.length) {
+    det.innerHTML = '';
+    return;
+  }
+  if (!ls.includes(tabIdiomas)) tabIdiomas = ls[0];
+  const l = tabIdiomas;
+  const cats = categoriasDe();
+  const incompleto = (x) => !carta.lemas[x] || cats.some((c) => !carta.categorias[c]?.[x]);
+  det.innerHTML = `<div class="tabs" role="tablist"></div>
+    <div class="tab-panel">
+      <div class="traduccion-fila"><span>Lema</span>
+        <input class="input" data-lema="${l}" value="${esc(carta.lemas[l] || '')}" placeholder="${esc(carta.lema)}" /></div>
+      ${cats.map((c) => `<div class="traduccion-fila"><span>${esc(c)}</span>
+        <input class="input" data-cat="${esc(c)}" value="${esc(carta.categorias[c]?.[l] || '')}" placeholder="${esc(c)}" /></div>`).join('')}
+    </div>`;
+  pestanas(det.querySelector('.tabs'), ls, l, (x) => { tabIdiomas = x; renderIdiomas(); }, incompleto);
+}
+
+// Activar o desactivar un idioma.
+$('idiomas-chips').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-l]');
+  if (!b || b.disabled) return;
+  const l = b.dataset.l;
+  carta.idiomas = carta.idiomas.includes(l) ? carta.idiomas.filter((x) => x !== l) : [...carta.idiomas, l];
+  // Mantiene el orden oficial de los idiomas.
+  carta.idiomas = config.idiomas.map((i) => i.Codigo).filter((x) => carta.idiomas.includes(x));
+  render();
+  guardar();
+});
+
+// Escribir la traducción del lema o de una categoría.
+$('idiomas-detalle').addEventListener('input', (e) => {
+  const v = e.target.value;
+  if (e.target.dataset.lema) carta.lemas[e.target.dataset.lema] = v;
+  if (e.target.dataset.cat !== undefined) (carta.categorias[e.target.dataset.cat] ??= {})[tabIdiomas] = v;
+  guardar();
+});
+
+/**
+ * pintarTraducciones muestra las pestañas de traducción del formulario con
+ * los textos del idioma elegido; los campos vacíos muestran el español como
+ * guía (y así saldrán en el PDF).
+ **/
+function pintarTraducciones() {
+  const ls = extras();
+  $('f-trad-bloque').hidden = !ls.length;
+  if (!ls.length) return;
+  if (!ls.includes(tabForm)) tabForm = ls[0];
+  const t = tradForm[tabForm] || {};
+  pestanas($('f-tabs'), ls, tabForm, (l) => { tabForm = l; pintarTraducciones(); }, (l) => !tradForm[l]?.nombre);
+  $('t-nombre').value = t.nombre || '';
+  $('t-descripcion').value = t.descripcion || '';
+  $('t-ingredientes').value = (t.ingredientes || []).join(', ');
+  // Guías con el texto en español.
+  $('t-nombre').placeholder = $('f-nombre').value || 'Nombre en ' + nombreIdioma(tabForm);
+  $('t-descripcion').placeholder = $('f-descripcion').value;
+  $('t-ingredientes').placeholder = ingredientes.join(', ');
+}
+
+// Escribir una traducción en el formulario.
+for (const [id, campo] of [['t-nombre', 'nombre'], ['t-descripcion', 'descripcion'], ['t-ingredientes', 'ingredientes']]) {
+  $(id).addEventListener('input', (e) => {
+    const t = (tradForm[tabForm] ??= {});
+    t[campo] = campo === 'ingredientes' ? e.target.value.split(',').map((x) => x.trim()).filter(Boolean) : e.target.value;
+  });
+}
+
+/**
+ * traducirTareas envía a traducir los textos de las tareas ({texto,
+ * aplicar}) al idioma destino, en lotes de 20 para avanzar por partes; cada
+ * resultado se aplica con su función. Devuelve cuántas se tradujeron.
+ **/
+async function traducirTareas(tareas, destino, alAvanzar = () => {}) {
+  let hechas = 0;
+  for (let i = 0; i < tareas.length; i += 20) {
+    const lote = tareas.slice(i, i + 20);
+    const r = await api('/api/traducir', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ destino, textos: lote.map((t) => t.texto) }),
+    });
+    lote.forEach((t, j) => r.textos[j] && t.aplicar(r.textos[j]));
+    hechas += lote.length;
+    alAvanzar(hechas);
+  }
+  return hechas;
+}
+
+/**
+ * tareasProducto arma las tareas para traducir al idioma l solo lo que le
+ * falta al producto p (nombre, descripción e ingredientes). Los ingredientes
+ * se traducen todos juntos si la lista traducida está incompleta.
+ **/
+function tareasProducto(p, l) {
+  const t = ((p.traducciones ??= {})[l] ??= {});
+  const tareas = [];
+  if (!t.nombre && p.nombre) tareas.push({ texto: p.nombre, aplicar: (v) => (t.nombre = v) });
+  if (!t.descripcion && p.descripcion) tareas.push({ texto: p.descripcion, aplicar: (v) => (t.descripcion = v) });
+  if (p.ingredientes.length && (t.ingredientes || []).length !== p.ingredientes.length) {
+    const nuevos = [...p.ingredientes];
+    p.ingredientes.forEach((ing, k) => tareas.push({ texto: ing, aplicar: (v) => { nuevos[k] = v; t.ingredientes = nuevos; } }));
+  }
+  return tareas;
+}
+
+// Traducir el producto del formulario a todos los idiomas activos (solo lo vacío).
+$('f-traducir').addEventListener('click', async (e) => {
+  agregarIngredientes();
+  const btn = e.currentTarget;
+  const p = { nombre: $('f-nombre').value.trim(), descripcion: $('f-descripcion').value.trim(), ingredientes, traducciones: tradForm };
+  if (!p.nombre) return ($('f-error').textContent = 'Escribe primero el nombre en español.');
+  btn.disabled = true;
+  try {
+    for (const l of extras()) await traducirTareas(tareasProducto(p, l), l);
+    toast('Traducción lista: revísala antes de guardar');
+  } catch (err) {
+    toast('No se pudo traducir: ' + err.message, true);
+  }
+  btn.disabled = false;
+  pintarTraducciones();
+});
+
+// Traducir todo lo que falta en la carta: lema, categorías y productos.
+$('traducir-todo').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  const ls = extras();
+  if (!ls.length) return toast('Activa primero otro idioma (EN, FR, DE o PT)', true);
+  btn.disabled = true;
+  const estado = $('traduccion-estado');
+  let total = 0;
+  try {
+    for (const l of ls) {
+      // Lema y categorías que faltan en este idioma.
+      const tareas = [];
+      if (!carta.lemas[l] && carta.lema) tareas.push({ texto: carta.lema, aplicar: (v) => (carta.lemas[l] = v) });
+      for (const c of categoriasDe()) {
+        if (!carta.categorias[c]?.[l]) tareas.push({ texto: c, aplicar: (v) => ((carta.categorias[c] ??= {})[l] = v) });
+      }
+      for (const p of carta.productos) tareas.push(...tareasProducto(p, l));
+      // Traduce por lotes, guardando el avance para no perderlo si algo falla.
+      await traducirTareas(tareas, l, (n) => {
+        estado.textContent = `Traduciendo al ${nombreIdioma(l)}: ${n} de ${tareas.length}…`;
+        guardar();
+      });
+      total += tareas.length;
+    }
+    estado.textContent = total ? `✓ ${total} textos traducidos con ${config.traductor}. Revisa los nombres de platos típicos: a veces es mejor dejarlos en español.` : '✓ No falta nada por traducir.';
+  } catch (err) {
+    estado.textContent = '';
+    toast('No se pudo traducir: ' + err.message, true);
+  }
+  btn.disabled = false;
+  render();
+  guardar();
+});
 
 /* ------------------------------------------------------------------ */
 /* Inicio                                                             */
@@ -478,7 +723,7 @@ async function mostrarDestino() {
  **/
 async function iniciar() {
   try {
-    carta = await api('/api/carta');
+    [carta, config] = await Promise.all([api('/api/carta'), api('/api/config')]);
   } catch (err) {
     toast('No se pudo cargar la carta: ' + err.message, true);
   }
@@ -486,5 +731,6 @@ async function iniciar() {
   $('lema').value = carta.lema;
   render();
   mostrarDestino();
+  actualizarEstado();
 }
 iniciar();

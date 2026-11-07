@@ -109,6 +109,29 @@ textarea.input { resize: vertical; }
 .chip { background: rgb(43 122 87 / .12); color: var(--verde-oscuro); font-size: .8125rem; }
 .chip button { border: 0; background: none; color: inherit; cursor: pointer; font-size: 1rem; line-height: 1; padding: 0 0 0 .125rem; }
 
+/* Título de sección con un botón a la derecha. */
+.fila-titulo { display: flex; align-items: center; justify-content: space-between; gap: .5rem; flex-wrap: wrap; }
+
+/* Idiomas activos: interruptores con forma de insignia. */
+.idiomas-chips { display: flex; flex-wrap: wrap; gap: .5rem; margin: .75rem 0; }
+.idioma-chip { min-height: 2.25rem; padding: 0 .75rem; border: 0; border-radius: 999px; font: inherit; font-size: .875rem; font-weight: 600;
+  background: #fff; box-shadow: inset 0 0 0 1px rgb(0 0 0 / .12); cursor: pointer; }
+.idioma-chip[aria-pressed="true"] { background: var(--verde); color: #fff; box-shadow: none; }
+.idioma-chip:disabled { cursor: default; opacity: 1; }
+
+/* Pestañas por idioma (traducciones). */
+.tabs { display: flex; gap: .25rem; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; margin: .5rem 0 0; border-bottom: 2px solid rgb(0 0 0 / .08); }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { border: 0; background: none; font: inherit; font-weight: 700; font-size: .875rem; padding: .5rem .75rem; margin-bottom: -2px;
+  color: rgb(26 28 32 / .6); border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap; }
+.tab[aria-selected="true"] { color: var(--verde-oscuro); border-bottom-color: var(--verde); }
+.tab .falta { color: var(--cereza); }
+.tab-panel { display: grid; gap: .25rem; padding-top: .75rem; }
+.tab-panel .label:not(:first-child) { margin-top: .5rem; }
+.traduccion-fila { display: grid; grid-template-columns: minmax(6rem, 10rem) 1fr; gap: .5rem; align-items: center; margin-top: .5rem; }
+.traduccion-fila span { font-size: .875rem; font-weight: 600; color: rgb(26 28 32 / .7); overflow-wrap: anywhere; }
+.badge.falta { background: rgb(206 17 38 / .1); color: var(--cereza); }
+
 /* Vista previa de la foto. */
 .imagen-fila { display: flex; gap: .75rem; align-items: center; }
 .preview { width: 5.5rem; height: 5.5rem; flex-shrink: 0; border-radius: .75rem; object-fit: cover; }
@@ -147,6 +170,7 @@ textarea.input { resize: vertical; }
 .aviso { margin-top: .75rem; padding: .625rem; border-radius: .75rem; background: rgb(252 209 22 / .3); font-size: .8125rem; text-align: left; }
 .aviso.listo { background: rgb(43 122 87 / .12); color: var(--verde-oscuro); }
 #destino.local { color: var(--cereza); font-weight: 600; }
+.estado.pendiente { color: var(--cereza); font-weight: 600; }
 
 /* Aviso flotante breve. */
 .toast {

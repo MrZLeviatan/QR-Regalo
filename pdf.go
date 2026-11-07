@@ -49,6 +49,27 @@ var (
 )
 
 /**
+ * etiquetas son los textos fijos del PDF en cada idioma.
+ **/
+var etiquetas = map[string]map[string]string{
+	"es": {"ingredientes": "Ingredientes", "pagina": "página", "otros": "Otros", "vacio": "No hay productos seleccionados.", "idioma": "Idioma"},
+	"en": {"ingredientes": "Ingredients", "pagina": "page", "otros": "Others", "vacio": "No products selected.", "idioma": "Language"},
+	"fr": {"ingredientes": "Ingrédients", "pagina": "page", "otros": "Autres", "vacio": "Aucun produit sélectionné.", "idioma": "Langue"},
+	"de": {"ingredientes": "Zutaten", "pagina": "Seite", "otros": "Sonstiges", "vacio": "Keine Produkte ausgewählt.", "idioma": "Sprache"},
+	"pt": {"ingredientes": "Ingredientes", "pagina": "página", "otros": "Outros", "vacio": "Nenhum produto selecionado.", "idioma": "Idioma"},
+}
+
+/**
+ * etiqueta devuelve un texto fijo en el idioma dado (o en español si falta).
+ **/
+func etiqueta(idioma, clave string) string {
+	if v := etiquetas[idioma][clave]; v != "" {
+		return v
+	}
+	return etiquetas[IdiomaBase][clave]
+}
+
+/**
  * pesos formatea un precio en pesos colombianos: 25000 → "$ 25.000".
  **/
 func pesos(v int64) string {
@@ -65,12 +86,15 @@ func pesos(v int64) string {
 }
 
 /**
- * GenerarPDF arma el PDF con los productos seleccionados agrupados por
- * categoría (en el orden en que aparece cada categoría por primera vez).
- * Entradas: la carta, los productos a incluir, la carpeta de imágenes y el
- * logo en PNG. Salida: los bytes del PDF.
+ * GenerarPDF arma el PDF en un idioma con los productos seleccionados
+ * agrupados por categoría (en el orden en que aparece cada categoría por
+ * primera vez). Los textos sin traducir salen en español.
+ * Entradas: la carta, los productos a incluir, el idioma, el formato de la URL
+ * pública del PDF de cada idioma (con %s en lugar del código, para los enlaces
+ * "Idioma: ES · EN …" de la cabecera), la carpeta de imágenes y el logo en PNG.
+ * Salida: los bytes del PDF.
  **/
-func GenerarPDF(c Carta, productos []Producto, imgDir string, logo []byte) ([]byte, error) {
+func GenerarPDF(c Carta, productos []Producto, idioma, enlaceIdioma, imgDir string, logo []byte) ([]byte, error) {
 	pdf := gofpdf.New("P", "mm", "A4", "")
 	pdf.SetMargins(margin, margin, margin)
 	pdf.SetAutoPageBreak(false, bottom)
@@ -90,19 +114,22 @@ func GenerarPDF(c Carta, productos []Producto, imgDir string, logo []byte) ([]by
 		pdf.SetY(-11)
 		pdf.SetFont("Helvetica", "", 8)
 		text(pdf, gris)
-		pdf.CellFormat(0, 5, tr(fmt.Sprintf("%s  ·  página %d", c.Nombre, pdf.PageNo())), "", 0, "C", false, 0, "")
+		pdf.CellFormat(0, 5, tr(fmt.Sprintf("%s  ·  %s %d", c.Nombre, etiqueta(idioma, "pagina"), pdf.PageNo())), "", 0, "C", false, 0, "")
 	})
 
 	pdf.AddPage()
-	cabecera(pdf, c, logo, tr)
+	cabecera(pdf, c, idioma, enlaceIdioma, logo, tr)
 
-	// Agrupa por categoría conservando el orden de aparición.
+	// Agrupa por categoría (ya traducida) conservando el orden de aparición.
+	// Cada producto se reemplaza por su versión en el idioma del PDF.
 	orden := []string{}
 	grupos := map[string][]Producto{}
 	for _, p := range productos {
-		cat := p.Categoria
+		t := c.EnIdioma(p, idioma)
+		p.Nombre, p.Descripcion, p.Ingredientes = t.Nombre, t.Descripcion, t.Ingredientes
+		cat := t.Categoria
 		if cat == "" {
-			cat = "Otros"
+			cat = etiqueta(idioma, "otros")
 		}
 		if _, ok := grupos[cat]; !ok {
 			orden = append(orden, cat)
@@ -116,13 +143,13 @@ func GenerarPDF(c Carta, productos []Producto, imgDir string, logo []byte) ([]by
 		pdf.SetFont("Helvetica", "I", 11)
 		text(pdf, gris)
 		pdf.SetXY(margin, y+10)
-		pdf.CellFormat(pageW-2*margin, 8, tr("No hay productos seleccionados."), "", 0, "C", false, 0, "")
+		pdf.CellFormat(pageW-2*margin, 8, tr(etiqueta(idioma, "vacio")), "", 0, "C", false, 0, "")
 	}
 	for _, cat := range orden {
 		items := grupos[cat]
 		// El título nunca queda solo al final de la página: se reserva su
 		// altura más la de la primera tarjeta.
-		if y+12+alturaTarjeta(pdf, items[0], tr) > pageH-bottom {
+		if y+12+alturaTarjeta(pdf, items[0], idioma, tr) > pageH-bottom {
 			pdf.AddPage()
 			y = margin + 4
 		}
@@ -133,12 +160,12 @@ func GenerarPDF(c Carta, productos []Producto, imgDir string, logo []byte) ([]by
 		y += 12
 		for _, p := range items {
 			// Salto de página cuando la tarjeta no cabe completa.
-			h := alturaTarjeta(pdf, p, tr)
+			h := alturaTarjeta(pdf, p, idioma, tr)
 			if y+h > pageH-bottom {
 				pdf.AddPage()
 				y = margin + 4
 			}
-			tarjeta(pdf, p, y, h, imgDir, tr)
+			tarjeta(pdf, p, y, h, idioma, imgDir, tr)
 			y += h + gap
 		}
 		y += 4
@@ -153,9 +180,10 @@ func GenerarPDF(c Carta, productos []Producto, imgDir string, logo []byte) ([]by
 
 /**
  * cabecera dibuja la banda verde de la primera página con el logo en un
- * círculo crema, el nombre del restaurante y su lema, y deja el cursor debajo.
+ * círculo crema, el nombre del restaurante y su lema traducido y, si hay más
+ * de un idioma, enlaces a los PDF de los demás idiomas. Deja el cursor debajo.
  **/
-func cabecera(pdf *gofpdf.Fpdf, c Carta, logo []byte, tr func(string) string) {
+func cabecera(pdf *gofpdf.Fpdf, c Carta, idioma, enlaceIdioma string, logo []byte, tr func(string) string) {
 	const h = 38.0
 	fill(pdf, verde)
 	pdf.Rect(0, 2.5, pageW, h, "F")
@@ -173,10 +201,33 @@ func cabecera(pdf *gofpdf.Fpdf, c Carta, logo []byte, tr func(string) string) {
 	pdf.SetFont("Helvetica", "B", 24)
 	pdf.SetXY(x, cy-10)
 	pdf.CellFormat(pageW-x-margin, 11, tr(c.Nombre), "", 0, "L", false, 0, "")
-	if c.Lema != "" {
+	if lema := c.LemaEn(idioma); lema != "" {
 		pdf.SetFont("Helvetica", "", 11)
 		pdf.SetXY(x, cy+2)
-		pdf.CellFormat(pageW-x-margin, 6, tr(c.Lema), "", 0, "L", false, 0, "")
+		pdf.CellFormat(pageW-x-margin, 6, tr(lema), "", 0, "L", false, 0, "")
+	}
+	// Selector de idioma arriba a la derecha: cada código enlaza a su PDF y el
+	// actual va resaltado en amarillo.
+	if len(c.Idiomas) > 1 && enlaceIdioma != "" {
+		const ancho = 8.0
+		xi := pageW - margin - ancho*float64(len(c.Idiomas))
+		pdf.SetTextColor(255, 255, 255)
+		pdf.SetFont("Helvetica", "", 7.5)
+		pdf.SetXY(xi-30, 6)
+		pdf.CellFormat(29, 5, tr(etiqueta(idioma, "idioma")+":"), "", 0, "R", false, 0, "")
+		for i, l := range c.Idiomas {
+			xl := xi + ancho*float64(i)
+			pdf.SetFont("Helvetica", "B", 8.5)
+			if l == idioma {
+				fill(pdf, amarillo)
+				pdf.RoundedRect(xl+0.5, 6, ancho-1, 5, 1.2, "1234", "F")
+				text(pdf, tinta)
+			} else {
+				pdf.SetTextColor(255, 255, 255)
+			}
+			pdf.SetXY(xl, 6)
+			pdf.CellFormat(ancho, 5, strings.ToUpper(l), "", 0, "C", false, 0, fmt.Sprintf(enlaceIdioma, l))
+		}
 	}
 	pdf.SetY(2.5 + h + 8)
 }
@@ -227,7 +278,7 @@ func lineas(pdf *gofpdf.Fpdf, s string, w float64) []string {
  * alturaTarjeta calcula el alto de la tarjeta de un producto: nombre, línea de
  * precio, descripción e ingredientes, o el alto de la foto si es mayor.
  **/
-func alturaTarjeta(pdf *gofpdf.Fpdf, p Producto, tr func(string) string) float64 {
+func alturaTarjeta(pdf *gofpdf.Fpdf, p Producto, idioma string, tr func(string) string) float64 {
 	w := anchoTexto(p)
 	// Nombre (puede ocupar varias líneas) + precio.
 	pdf.SetFont("Helvetica", "B", 12)
@@ -239,7 +290,7 @@ func alturaTarjeta(pdf *gofpdf.Fpdf, p Producto, tr func(string) string) float64
 	// Ingredientes.
 	if len(p.Ingredientes) > 0 {
 		pdf.SetFont("Helvetica", "I", 8.5)
-		h += 1.5 + float64(len(lineas(pdf, tr(ingredientesTexto(p)), w)))*4.2
+		h += 1.5 + float64(len(lineas(pdf, tr(ingredientesTexto(p, idioma)), w)))*4.2
 	}
 	if p.Imagen != "" {
 		h = max(h, imgSize)
@@ -248,17 +299,17 @@ func alturaTarjeta(pdf *gofpdf.Fpdf, p Producto, tr func(string) string) float64
 }
 
 /**
- * ingredientesTexto devuelve la línea "Ingredientes: a, b, c".
+ * ingredientesTexto devuelve la línea "Ingredientes: a, b, c" en el idioma dado.
  **/
-func ingredientesTexto(p Producto) string {
-	return "Ingredientes: " + strings.Join(p.Ingredientes, ", ")
+func ingredientesTexto(p Producto, idioma string) string {
+	return etiqueta(idioma, "ingredientes") + ": " + strings.Join(p.Ingredientes, ", ")
 }
 
 /**
  * tarjeta dibuja un producto en una tarjeta blanca redondeada en la posición
  * y dada, con la foto cuadrada (esquinas redondeadas) a la derecha.
  **/
-func tarjeta(pdf *gofpdf.Fpdf, p Producto, y, h float64, imgDir string, tr func(string) string) {
+func tarjeta(pdf *gofpdf.Fpdf, p Producto, y, h float64, idioma, imgDir string, tr func(string) string) {
 	x, w := margin, pageW-2*margin
 	// Fondo blanco con borde suave, como la clase "card" del tema.
 	fill(pdf, rgb{255, 255, 255})
@@ -295,7 +346,7 @@ func tarjeta(pdf *gofpdf.Fpdf, p Producto, y, h float64, imgDir string, tr func(
 		ty += 1.5
 		pdf.SetFont("Helvetica", "I", 8.5)
 		text(pdf, verde)
-		for _, l := range lineas(pdf, tr(ingredientesTexto(p)), tw) {
+		for _, l := range lineas(pdf, tr(ingredientesTexto(p, idioma)), tw) {
 			pdf.SetXY(x+pad, ty)
 			pdf.CellFormat(tw, 4.2, l, "", 0, "L", false, 0, "")
 			ty += 4.2

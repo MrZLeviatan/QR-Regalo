@@ -1,9 +1,9 @@
 <!doctype html>
 <!--
-  Editor de la carta de El Regalo: cabecera con logo y nombre, formulario para
-  agregar o editar productos, lista de productos por categoría con casillas
-  para elegir cuáles entran en el PDF, y el botón que publica el PDF y
-  descarga su código QR.
+  Editor de la carta de El Regalo: cabecera con logo y nombre, idiomas,
+  formulario para agregar o editar productos, lista de productos por categoría
+  con casillas para elegir cuáles entran en el PDF, y el botón que publica la
+  carta en la dirección fija de su código QR (descargable).
 -->
 <html lang="es">
 <head>
@@ -39,12 +39,24 @@
         <span id="destino" class="estado"></span>
         <span id="estado" class="estado" role="status"></span>
       </div>
-      <button id="ver-pdf" class="btn btn-secondary">📄 <span class="ocultar-movil">Ver PDF</span></button>
-      <button id="descargar-qr" class="btn btn-primary">▦ Descargar QR</button>
+      <button id="ver-pdf" class="btn btn-secondary" title="Vista previa sin publicar">📄 <span class="ocultar-movil">Vista previa</span></button>
+      <button id="descargar-qr" class="btn btn-primary">⬆ Publicar carta</button>
     </div>
   </div>
 
   <main class="contenedor principal">
+    <!-- Idiomas: activar idiomas, traducir lema y categorías y autocompletar lo que falte. -->
+    <section class="card formulario" aria-labelledby="idiomas-titulo">
+      <div class="fila-titulo">
+        <h2 id="idiomas-titulo" class="seccion-titulo">🌐 Idiomas</h2>
+        <button type="button" id="traducir-todo" class="btn btn-secondary btn-sm">✨ Traducir lo que falta</button>
+      </div>
+      <p class="ayuda">El QR abre el PDF en el idioma del celular (en español si ese idioma no está activo). Lo que no tenga traducción sale en español.</p>
+      <div id="idiomas-chips" class="idiomas-chips" role="group" aria-label="Idiomas activos"></div>
+      <div id="idiomas-detalle"></div>
+      <p id="traduccion-estado" class="ayuda" role="status"></p>
+    </section>
+
     <!-- Formulario de producto (agregar o editar). -->
     <form id="formulario" class="card formulario" autocomplete="off">
       <h2 id="form-titulo" class="seccion-titulo">➕ Agregar producto</h2>
@@ -86,6 +98,22 @@
             </div>
           </div>
         </div>
+        <!-- Traducciones del producto: una pestaña por idioma activo. -->
+        <div class="campo ancho" id="f-trad-bloque" hidden>
+          <div class="fila-titulo">
+            <span class="label">Traducciones</span>
+            <button type="button" id="f-traducir" class="btn btn-ghost btn-sm">✨ Traducir este producto</button>
+          </div>
+          <div id="f-tabs" class="tabs" role="tablist" aria-label="Idioma de la traducción"></div>
+          <div class="tab-panel">
+            <label class="label" for="t-nombre">Nombre</label>
+            <input id="t-nombre" class="input" maxlength="80" />
+            <label class="label" for="t-descripcion">Descripción</label>
+            <textarea id="t-descripcion" class="input" rows="2" maxlength="300"></textarea>
+            <label class="label" for="t-ingredientes">Ingredientes <span class="ayuda">(separados por coma, en el mismo orden)</span></label>
+            <input id="t-ingredientes" class="input" />
+          </div>
+        </div>
       </div>
       <p id="f-error" class="field-error" role="alert"></p>
       <div class="acciones">
@@ -111,6 +139,7 @@
     <p class="ayuda" id="d-resumen"></p>
     <img id="d-qr" alt="Código QR de la carta" class="qr" />
     <p class="url"><a id="d-url" target="_blank" rel="noopener"></a></p>
+    <p class="ayuda">Abrir la carta publicada: <span id="d-idiomas"></span></p>
     <p id="d-aviso" class="aviso"></p>
     <div class="acciones">
       <button id="d-cerrar" class="btn btn-ghost">Cerrar</button>

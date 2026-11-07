@@ -1,8 +1,9 @@
 /**
- * Publicación de los PDF en GitHub Pages, para que el QR funcione desde
+ * Publicación de la carta en GitHub Pages, para que el QR funcione desde
  * cualquier red (datos móviles, cualquier Wi-Fi) sin dejar el PC encendido.
- * Usa la API REST de GitHub con un token personal: sube el PDF al repositorio
- * (carpeta carta/) y activa Pages la primera vez si todavía no lo está.
+ * Usa la API REST de GitHub con un token personal: reemplaza en un solo commit
+ * los PDF y la página selectora en la raíz del repositorio (la dirección del
+ * QR nunca cambia) y activa Pages la primera vez si todavía no lo está.
  **/
 package main
 
@@ -37,6 +38,8 @@ type GitHub struct {
 	mu       sync.Mutex
 	pagesURL string // termina en "/", p. ej. https://usuario.github.io/carta/
 	pagesOK  bool   // Pages ya está activo en el repositorio
+
+	ultimoCommit string // padre del próximo commit (lo fija punta)
 }
 
 /**
@@ -81,47 +84,133 @@ func (g *GitHub) Sitio() string {
 }
 
 /**
- * URL devuelve la dirección pública del PDF con el id dado.
+ * Archivo es un archivo publicado, con su ruta dentro del sitio (p. ej. "es.pdf").
  **/
-func (g *GitHub) URL(id string) string { return g.Sitio() + "carta/" + id + ".pdf" }
+type Archivo struct {
+	Nombre string
+	Datos  []byte
+}
 
 /**
- * Subir guarda el PDF en carta/{id}.pdf del repositorio. Como el id es un
- * hash del contenido, si el archivo ya existe no se vuelve a subir. Después
- * se asegura de que Pages esté activo.
+ * Publicar reemplaza la carta del sitio en un solo commit: sube los archivos
+ * a la raíz del repositorio y borra los de la lista borrar que existan (PDF
+ * de idiomas desactivados). Un solo commit = un solo despliegue de Pages, así
+ * nadie ve una mezcla de versiones. Si nada cambió no crea commit. Después se
+ * asegura de que Pages esté activo.
  **/
-func (g *GitHub) Subir(id string, pdf []byte, productos int) error {
-	ruta := "/repos/" + g.repo + "/contents/carta/" + id + ".pdf"
-	// Ya publicado: mismo contenido, nada que subir.
-	err := g.api("GET", ruta, nil, nil)
-	if err == nil {
-		return g.activarPages()
-	}
-	if !esNoEncontrado(err) {
+func (g *GitHub) Publicar(archivos []Archivo, borrar []string, mensaje string) error {
+	rama, base, err := g.punta()
+	if err != nil {
 		return err
 	}
-	// Sube el archivo a la rama por defecto (sirve también con un repositorio vacío).
-	body := map[string]string{
-		"message": fmt.Sprintf("Carta publicada (%d productos)", productos),
-		"content": base64.StdEncoding.EncodeToString(pdf),
+	// Árbol actual: para saber qué archivos borrables existen de verdad.
+	var arbolActual struct {
+		SHA  string `json:"sha"`
+		Tree []struct {
+			Path string `json:"path"`
+		} `json:"tree"`
 	}
-	if err := g.api("PUT", ruta, body, nil); err != nil {
-		return fmt.Errorf("no se pudo subir el PDF a GitHub: %w", err)
+	if err := g.api("GET", "/repos/"+g.repo+"/git/trees/"+base+"?recursive=1", nil, &arbolActual); err != nil {
+		return err
+	}
+	existe := map[string]bool{}
+	for _, e := range arbolActual.Tree {
+		existe[e.Path] = true
+	}
+	// Sube cada archivo como blob y arma el árbol nuevo sobre el actual.
+	entradas := []map[string]any{}
+	for _, f := range archivos {
+		var blob struct {
+			SHA string `json:"sha"`
+		}
+		body := map[string]string{"content": base64.StdEncoding.EncodeToString(f.Datos), "encoding": "base64"}
+		if err := g.api("POST", "/repos/"+g.repo+"/git/blobs", body, &blob); err != nil {
+			return fmt.Errorf("no se pudo subir %s a GitHub: %w", f.Nombre, err)
+		}
+		entradas = append(entradas, map[string]any{"path": f.Nombre, "mode": "100644", "type": "blob", "sha": blob.SHA})
+	}
+	for _, ruta := range borrar {
+		if existe[ruta] {
+			entradas = append(entradas, map[string]any{"path": ruta, "mode": "100644", "type": "blob", "sha": nil})
+		}
+	}
+	var arbol struct {
+		SHA string `json:"sha"`
+	}
+	if err := g.api("POST", "/repos/"+g.repo+"/git/trees", map[string]any{"base_tree": base, "tree": entradas}, &arbol); err != nil {
+		return err
+	}
+	// Sin cambios (misma carta): no hace falta commit.
+	if arbol.SHA != arbolActual.SHA {
+		var commit struct {
+			SHA string `json:"sha"`
+		}
+		body := map[string]any{"message": mensaje, "tree": arbol.SHA, "parents": []string{g.ultimoCommit}}
+		if err := g.api("POST", "/repos/"+g.repo+"/git/commits", body, &commit); err != nil {
+			return err
+		}
+		if err := g.api("PATCH", "/repos/"+g.repo+"/git/refs/heads/"+rama, map[string]any{"sha": commit.SHA}, nil); err != nil {
+			return fmt.Errorf("no se pudo actualizar la rama %s: %w", rama, err)
+		}
 	}
 	return g.activarPages()
 }
 
 /**
- * Disponible indica si el PDF ya se puede abrir en Pages: tras subirlo, GitHub
- * tarda alrededor de un minuto en desplegar el sitio.
+ * punta devuelve la rama por defecto y el árbol de su último commit (y guarda
+ * ese commit como padre del siguiente). Con el repositorio vacío crea primero
+ * un archivo .nojekyll (Pages publica tal cual, sin procesar con Jekyll),
+ * porque la API de árboles no funciona sin un commit inicial.
  **/
-func (g *GitHub) Disponible(id string) bool {
-	res, err := g.client.Head(g.URL(id))
+func (g *GitHub) punta() (rama, arbol string, err error) {
+	var repo struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	if err := g.api("GET", "/repos/"+g.repo, nil, &repo); err != nil {
+		return "", "", err
+	}
+	var ref struct {
+		Object struct {
+			SHA string `json:"sha"`
+		} `json:"object"`
+	}
+	err = g.api("GET", "/repos/"+g.repo+"/git/ref/heads/"+repo.DefaultBranch, nil, &ref)
+	if e := (*errorAPI)(nil); errors.As(err, &e) && (e.code == http.StatusConflict || e.code == http.StatusNotFound) {
+		// Repositorio vacío: commit inicial con .nojekyll y se vuelve a leer.
+		body := map[string]string{"message": "Inicia el sitio de la carta", "content": ""}
+		if err := g.api("PUT", "/repos/"+g.repo+"/contents/.nojekyll", body, nil); err != nil {
+			return "", "", fmt.Errorf("no se pudo iniciar el repositorio: %w", err)
+		}
+		return g.punta()
+	}
+	if err != nil {
+		return "", "", err
+	}
+	var commit struct {
+		Tree struct {
+			SHA string `json:"sha"`
+		} `json:"tree"`
+	}
+	if err := g.api("GET", "/repos/"+g.repo+"/git/commits/"+ref.Object.SHA, nil, &commit); err != nil {
+		return "", "", err
+	}
+	g.ultimoCommit = ref.Object.SHA
+	return repo.DefaultBranch, commit.Tree.SHA, nil
+}
+
+/**
+ * Publicada indica si el sitio ya muestra la versión dada: tras publicar,
+ * GitHub tarda alrededor de un minuto en desplegar. Lee la marca de versión
+ * del index.html (con un parámetro distinto cada vez para evitar la caché).
+ **/
+func (g *GitHub) Publicada(version string) bool {
+	res, err := g.client.Get(g.Sitio() + "?comprobar=" + aleatorio())
 	if err != nil {
 		return false
 	}
-	res.Body.Close()
-	return res.StatusCode == http.StatusOK
+	defer res.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(res.Body, 64<<10))
+	return res.StatusCode == http.StatusOK && bytes.Contains(b, []byte(`content="`+version+`"`))
 }
 
 /**
@@ -136,7 +225,7 @@ func (g *GitHub) activarPages() error {
 	if ok || g.leerPages() {
 		return nil
 	}
-	// Rama por defecto del repositorio (ya existe porque se acaba de subir un archivo).
+	// Rama por defecto del repositorio (ya existe porque se acaba de publicar).
 	var repo struct {
 		DefaultBranch string `json:"default_branch"`
 	}

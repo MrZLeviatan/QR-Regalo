@@ -21,6 +21,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log"
@@ -29,6 +30,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	qrcode "github.com/skip2/go-qrcode"
@@ -47,8 +49,7 @@ var webFS embed.FS
 const maxImagen = 8 << 20
 
 /**
- * idValido limita los identificadores de PDF a hexadecimal, para que nunca
- * puedan usarse como rutas.
+ * idValido limita las versiones de la carta a 12 caracteres hexadecimales.
  **/
 var idValido = regexp.MustCompile(`^[0-9a-f]{12}$`)
 
@@ -58,11 +59,13 @@ var idValido = regexp.MustCompile(`^[0-9a-f]{12}$`)
 type App struct {
 	store   *Store
 	imgDir  string
-	pdfDir  string
+	pubDir  string // copia local de la carta publicada
 	baseURL string
 	logo    []byte
 	gh      *GitHub // nil = modo local (el QR apunta a este equipo)
 	ghError string  // por qué no se pudo usar GitHub, para mostrarlo en el editor
+
+	traductor *Traductor
 }
 
 /**
@@ -75,19 +78,20 @@ func main() {
 	dataDir := env("DATA_DIR", "data")
 	base := strings.TrimRight(env("BASE_URL", "http://"+ipLocal()+":"+port), "/")
 
-	// Carpetas de datos: imágenes subidas y PDF publicados.
+	// Carpetas de datos: imágenes subidas y copia de la carta publicada.
 	a := &App{
 		store:   &Store{path: filepath.Join(dataDir, "carta.json")},
 		imgDir:  filepath.Join(dataDir, "img"),
-		pdfDir:  filepath.Join(dataDir, "pdf"),
+		pubDir:  filepath.Join(dataDir, "publicada"),
 		baseURL: base,
 	}
-	for _, d := range []string{a.imgDir, a.pdfDir} {
+	for _, d := range []string{a.imgDir, a.pubDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			log.Fatal(err)
 		}
 	}
 	a.logo, _ = webFS.ReadFile("web/logo.png")
+	a.traductor = NuevoTraductor()
 
 	// Publicación en GitHub Pages si está configurada; si falla, modo local con aviso.
 	if token, repo := os.Getenv("GITHUB_TOKEN"), os.Getenv("GITHUB_REPO"); token != "" || repo != "" {
@@ -108,17 +112,21 @@ func main() {
 	mux.HandleFunc("PUT /api/carta", a.putCarta)
 	mux.HandleFunc("POST /api/imagenes", a.subirImagen)
 	mux.HandleFunc("GET /api/config", a.config)
+	mux.HandleFunc("POST /api/traducir", a.traducir)
 	mux.HandleFunc("POST /api/publicar", a.publicar)
-	mux.HandleFunc("GET /api/disponible/{id}", a.disponible)
-	mux.HandleFunc("GET /api/qr/{id}", a.qr)
-	mux.HandleFunc("GET /carta/{id}", a.verPDF)
+	mux.HandleFunc("GET /api/estado", a.estado)
+	mux.HandleFunc("GET /api/vista/{archivo}", a.vista)
+	mux.HandleFunc("GET /api/disponible/{version}", a.disponible)
+	mux.HandleFunc("GET /api/qr", a.qr)
+	mux.HandleFunc("GET /carta/{archivo...}", a.verCarta)
 	mux.Handle("GET /img/", http.StripPrefix("/img/", http.FileServer(http.Dir(a.imgDir))))
 
 	log.Printf("Editor de la carta: http://localhost:%s", port)
+	log.Printf("Traducción automática: %s", a.traductor.nombre)
 	if a.gh != nil {
-		log.Printf("Los QR apuntarán a GitHub Pages: %scarta/", a.gh.Sitio())
+		log.Printf("QR fijo de la carta (GitHub Pages): %s", a.urlCarta())
 	} else {
-		log.Printf("Los QR apuntarán a: %s  (solo red local: configura GITHUB_TOKEN y GITHUB_REPO)", base)
+		log.Printf("QR fijo de la carta: %s  (solo red local: configura GITHUB_TOKEN y GITHUB_REPO)", a.urlCarta())
 	}
 	log.Fatal(http.ListenAndServe(":"+port, mux))
 }
@@ -185,9 +193,32 @@ func (a *App) subirImagen(w http.ResponseWriter, r *http.Request) {
 }
 
 /**
- * publicar genera el PDF con los productos seleccionados y lo guarda con un
- * identificador derivado de su contenido: la misma selección produce siempre
- * el mismo enlace (y el mismo QR). Devuelve el id, la URL del PDF y la del QR.
+ * versionDiseno cambia cuando cambia el diseño del PDF o del selector, para
+ * que una carta igual publicada con el diseño nuevo cuente como cambio.
+ **/
+const versionDiseno = 3
+
+/**
+ * version devuelve la huella de todo lo que se ve en la carta publicada
+ * (textos, precios, fotos, idiomas y selección). Dos cartas iguales tienen la
+ * misma versión; sirve para saber si hay cambios sin publicar.
+ **/
+func version(c Carta) string {
+	huella, _ := json.Marshal(map[string]any{
+		"v": versionDiseno, "nombre": c.Nombre, "lema": c.Lema, "lemas": c.Lemas,
+		"idiomas": c.Idiomas, "categorias": c.Categorias, "productos": c.Seleccionados(),
+	})
+	sum := sha256.Sum256(huella)
+	return hex.EncodeToString(sum[:6])
+}
+
+/**
+ * publicar genera la carta (un PDF por idioma activo y el index.html que
+ * elige el idioma del celular) y reemplaza con ella la publicada en la
+ * dirección fija del QR: el QR impreso siempre muestra la última versión.
+ * Guarda una copia local (vista previa y modo local) y, si hay GitHub, la
+ * sube a Pages en un solo commit. Devuelve la versión, la URL fija, la del QR
+ * y los idiomas publicados.
  **/
 func (a *App) publicar(w http.ResponseWriter, r *http.Request) {
 	c, err := a.store.Leer()
@@ -200,32 +231,127 @@ func (a *App) publicar(w http.ResponseWriter, r *http.Request) {
 		fallo(w, http.StatusBadRequest, errors.New("selecciona al menos un producto"))
 		return
 	}
-	pdf, err := GenerarPDF(c, sel, a.imgDir, a.logo)
+	v := version(c)
+
+	// Un PDF por idioma (con enlaces entre ellos) y la página selectora. El
+	// ?v= de los enlaces obliga a los celulares a bajar la versión nueva.
+	sitio := a.urlCarta()
+	var archivos []Archivo
+	for _, l := range c.Idiomas {
+		pdf, err := GenerarPDF(c, sel, l, sitio+"%s.pdf?v="+v, a.imgDir, a.logo)
+		if err != nil {
+			fallo(w, http.StatusInternalServerError, err)
+			return
+		}
+		archivos = append(archivos, Archivo{Nombre: l + ".pdf", Datos: pdf})
+	}
+	index, err := Selector(c, v)
 	if err != nil {
 		fallo(w, http.StatusInternalServerError, err)
 		return
 	}
-	// El id es un hash del PDF: mismo contenido → mismo QR.
-	sum := sha256.Sum256(pdf)
-	id := hex.EncodeToString(sum[:6])
-	// Copia local (para la vista previa) y, si hay GitHub, publicación en Pages.
-	if err := os.WriteFile(filepath.Join(a.pdfDir, id+".pdf"), pdf, 0o644); err != nil {
-		fallo(w, http.StatusInternalServerError, err)
-		return
+	archivos = append(archivos, Archivo{Nombre: "index.html", Datos: index})
+	// PDF de idiomas desactivados: se borran para que no queden desactualizados.
+	var borrar []string
+	for _, i := range Idiomas {
+		if !slices.Contains(c.Idiomas, i.Codigo) {
+			borrar = append(borrar, i.Codigo+".pdf")
+		}
 	}
+
+	// Primero GitHub (si falla, la copia local no se toca y se puede reintentar).
 	if a.gh != nil {
-		if err := a.gh.Subir(id, pdf, len(sel)); err != nil {
+		msg := fmt.Sprintf("Carta actualizada: %d productos en %s", len(sel), strings.Join(c.Idiomas, ", "))
+		if err := a.gh.Publicar(archivos, borrar, msg); err != nil {
 			fallo(w, http.StatusBadGateway, err)
 			return
 		}
 	}
+	// Copia local: archivos nuevos, borrados y la versión publicada.
+	for _, f := range archivos {
+		if err := os.WriteFile(filepath.Join(a.pubDir, f.Nombre), f.Datos, 0o644); err != nil {
+			fallo(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+	for _, f := range borrar {
+		os.Remove(filepath.Join(a.pubDir, f))
+	}
+	os.WriteFile(filepath.Join(a.pubDir, "version"), []byte(v), 0o644)
+
 	responder(w, map[string]any{
-		"id":        id,
-		"url":       a.urlPDF(id),
-		"qr":        "/api/qr/" + id,
+		"version":   v,
+		"url":       sitio,
+		"qr":        "/api/qr",
 		"productos": len(sel),
+		"idiomas":   c.Idiomas,
 		"web":       a.gh != nil,
 	})
+}
+
+/**
+ * vista genera al vuelo el PDF de un idioma con la carta guardada, sin
+ * publicarlo: es la vista previa del editor (la carta de las mesas no cambia).
+ **/
+func (a *App) vista(w http.ResponseWriter, r *http.Request) {
+	l, ok := strings.CutSuffix(r.PathValue("archivo"), ".pdf")
+	if !ok || !idiomaValido(l) {
+		http.NotFound(w, r)
+		return
+	}
+	c, err := a.store.Leer()
+	if err != nil {
+		fallo(w, http.StatusInternalServerError, err)
+		return
+	}
+	// Sin enlaces de idioma: la vista previa no está publicada en ninguna dirección.
+	pdf, err := GenerarPDF(c, c.Seleccionados(), l, "", a.imgDir, a.logo)
+	if err != nil {
+		fallo(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Write(pdf)
+}
+
+/**
+ * estado indica si la carta guardada tiene cambios que todavía no se han
+ * publicado (o si nunca se ha publicado), para avisar en el editor.
+ **/
+func (a *App) estado(w http.ResponseWriter, r *http.Request) {
+	c, err := a.store.Leer()
+	if err != nil {
+		fallo(w, http.StatusInternalServerError, err)
+		return
+	}
+	pub, _ := os.ReadFile(filepath.Join(a.pubDir, "version"))
+	responder(w, map[string]bool{
+		"publicada":  len(pub) > 0,
+		"pendientes": string(pub) != version(c) && len(c.Seleccionados()) > 0,
+	})
+}
+
+/**
+ * traducir traduce textos del español al idioma pedido con el proveedor
+ * configurado. Entrada: {"destino": "en", "textos": [...]}. Salida:
+ * {"textos": [...]} en el mismo orden (los vacíos siguen vacíos).
+ **/
+func (a *App) traducir(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Destino string   `json:"destino"`
+		Textos  []string `json:"textos"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 256<<10)).Decode(&in); err != nil || len(in.Textos) > 500 {
+		fallo(w, http.StatusBadRequest, errors.New("petición de traducción inválida"))
+		return
+	}
+	out, err := a.traductor.Traducir(in.Textos, in.Destino)
+	if err != nil {
+		fallo(w, http.StatusBadGateway, err)
+		return
+	}
+	responder(w, map[string]any{"textos": out})
 }
 
 /**
@@ -238,71 +364,96 @@ func (a *App) config(w http.ResponseWriter, r *http.Request) {
 	if a.gh != nil {
 		modo, destino = "web", a.gh.Sitio()
 	}
-	responder(w, map[string]string{"modo": modo, "destino": destino, "error": a.ghError})
+	responder(w, map[string]any{
+		"modo": modo, "destino": destino, "error": a.ghError,
+		"traductor": a.traductor.nombre, "idiomas": Idiomas,
+	})
 }
 
 /**
- * disponible indica si el PDF publicado ya se puede abrir desde internet
- * (GitHub Pages tarda cerca de un minuto en desplegar). En modo local siempre
- * está disponible.
+ * disponible indica si la versión dada ya se ve en internet (GitHub Pages
+ * tarda cerca de un minuto en desplegar). En modo local siempre lo está.
  **/
 func (a *App) disponible(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if !idValido.MatchString(id) {
+	v := r.PathValue("version")
+	if !idValido.MatchString(v) {
 		http.NotFound(w, r)
 		return
 	}
-	responder(w, map[string]bool{"disponible": a.gh == nil || a.gh.Disponible(id)})
+	responder(w, map[string]bool{"disponible": a.gh == nil || a.gh.Publicada(v)})
 }
 
 /**
- * qr devuelve el código QR (PNG de 1024 px) que apunta al PDF publicado. Con
- * ?descargar=1 el navegador lo guarda como archivo.
+ * qr devuelve el código QR (PNG de 1024 px) de la dirección fija de la carta.
+ * Es siempre el mismo: se imprime una vez y cada publicación lo actualiza.
+ * Con ?descargar=1 el navegador lo guarda como archivo.
  **/
 func (a *App) qr(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimSuffix(r.PathValue("id"), ".png")
-	if !idValido.MatchString(id) {
-		http.NotFound(w, r)
-		return
-	}
-	png, err := qrcode.Encode(a.urlPDF(id), qrcode.Medium, 1024)
+	png, err := qrcode.Encode(a.urlCarta(), qrcode.Medium, 1024)
 	if err != nil {
 		fallo(w, http.StatusInternalServerError, err)
 		return
 	}
 	w.Header().Set("Content-Type", "image/png")
 	if r.URL.Query().Has("descargar") {
-		w.Header().Set("Content-Disposition", `attachment; filename="qr-carta-`+id+`.png"`)
+		w.Header().Set("Content-Disposition", `attachment; filename="qr-carta-el-regalo.png"`)
 	}
 	w.Write(png)
 }
 
 /**
- * verPDF sirve un PDF publicado. Por defecto se descarga (es lo que abre el
- * QR); con ?ver=1 se muestra en el navegador como vista previa.
+ * archivoValido limita lo que se sirve de la carta publicada: su página
+ * selectora y los PDF de los idiomas admitidos.
  **/
-func (a *App) verPDF(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimSuffix(r.PathValue("id"), ".pdf")
-	if !idValido.MatchString(id) {
+var archivoValido = regexp.MustCompile(`^(index\.html|(es|en|fr|de|pt)\.pdf)?$`)
+
+/**
+ * verCarta sirve la copia local de la carta publicada: la página selectora
+ * (raíz) o un PDF. Los PDF se descargan (es lo que abre el QR en modo local);
+ * con ?ver=1 se muestran en el navegador como vista previa. Se pide no
+ * guardar en caché para que siempre se vea la última versión.
+ **/
+func (a *App) verCarta(w http.ResponseWriter, r *http.Request) {
+	archivo := r.PathValue("archivo")
+	if !archivoValido.MatchString(archivo) {
 		http.NotFound(w, r)
 		return
 	}
-	modo := "attachment"
-	if r.URL.Query().Has("ver") {
-		modo = "inline"
+	if archivo == "" {
+		archivo = "index.html"
 	}
-	w.Header().Set("Content-Disposition", modo+`; filename="carta-el-regalo.pdf"`)
-	http.ServeFile(w, r, filepath.Join(a.pdfDir, id+".pdf"))
+	w.Header().Set("Cache-Control", "no-cache")
+	if strings.HasSuffix(archivo, ".pdf") {
+		modo := "attachment"
+		if r.URL.Query().Has("ver") {
+			modo = "inline"
+		}
+		w.Header().Set("Content-Disposition", modo+`; filename="carta-el-regalo-`+strings.TrimSuffix(archivo, ".pdf")+`.pdf"`)
+	}
+	// ServeContent en vez de ServeFile: ServeFile redirige ".../index.html" a "./".
+	f, err := os.Open(filepath.Join(a.pubDir, archivo))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	http.ServeContent(w, r, archivo, st.ModTime(), f)
 }
 
 /**
- * urlPDF es la dirección pública del PDF que se codifica en el QR.
+ * urlCarta es la dirección fija de la carta publicada, la que va en el QR:
+ * la raíz del sitio de GitHub Pages o, en modo local, /carta/ de este equipo.
  **/
-func (a *App) urlPDF(id string) string {
+func (a *App) urlCarta() string {
 	if a.gh != nil {
-		return a.gh.URL(id)
+		return a.gh.Sitio()
 	}
-	return a.baseURL + "/carta/" + id + ".pdf"
+	return a.baseURL + "/carta/"
 }
 
 /**
